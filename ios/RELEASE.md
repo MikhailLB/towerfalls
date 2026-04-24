@@ -4,6 +4,19 @@
 
 Все шаги выполняются **только на macOS** (нужен Xcode 16 или новее и установленный CocoaPods).
 
+## Идентификаторы приложения
+
+| Что | Значение |
+| --- | --- |
+| Bundle ID | `com.tstudiomgames.towerfalls` |
+| App Store Connect **Apple ID (App ID)** | `6763527518` |
+| App Store Connect record | https://appstoreconnect.apple.com/apps/6763527518 |
+
+Bundle ID используется Xcode при подписи и сборке, а числовой Apple ID
+(`6763527518`) нужен для `ExportOptions.plist`, `fastlane`, deep links и
+любых автоматизированных выгрузок через `xcodebuild -exportArchive` /
+Transporter CLI (`iTMSTransporter`).
+
 ## 1. Конфигурация, которая уже в репозитории
 
 - `ios/Podfile` — `platform :ios, '13.0'`, `post_install` форсит
@@ -76,8 +89,13 @@ flutter pub get
 cd ios && pod install && cd ..
 
 # IPA для App Store Connect
-flutter build ipa --release
+flutter build ipa --release --export-options-plist=ios/ExportOptions.plist
 ```
+
+`ios/ExportOptions.plist` в репозитории заранее настроен на наш App Store
+Connect App ID `6763527518` и bundle `com.tstudiomgames.towerfalls`. Если
+будете собирать из CI — в нём же можно переключить `signingStyle` на
+`manual` и раскомментировать `teamID`.
 
 Готовый артефакт:
 
@@ -98,6 +116,20 @@ flutter build ipa --release
 2. Выберите схему **Runner** и target-device **Any iOS Device (arm64)**.
 3. **Product → Archive**.
 4. В Organizer: **Distribute App → App Store Connect → Upload**.
+
+Вариант 3 — полностью автоматом (CI / скриптом):
+
+```bash
+# Нужен App Store Connect API key: ASC_KEY_ID, ASC_ISSUER_ID, AuthKey_*.p8
+xcrun altool --upload-app \
+  --type ios \
+  --file build/ios/ipa/tower_falls.ipa \
+  --apiKey "$ASC_KEY_ID" \
+  --apiIssuer "$ASC_ISSUER_ID"
+```
+
+App Store Connect сам привяжет билд к записи с Apple ID `6763527518`
+по bundle id `com.tstudiomgames.towerfalls`.
 
 ## 7. Чек-лист перед релизом
 
