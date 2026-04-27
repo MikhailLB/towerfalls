@@ -28,7 +28,7 @@ Transporter CLI (`iTMSTransporter`).
 - `ios/Flutter/AppFrameworkInfo.plist` — `MinimumOSVersion = 13.0`.
 - `ios/Runner/Info.plist`:
   - `CFBundleDisplayName = Tower Falls`
-  - iPhone orientations: Portrait, LandscapeLeft, LandscapeRight
+  - iPhone orientations: Portrait, PortraitUpsideDown, LandscapeLeft, LandscapeRight
   - iPad orientations: Portrait, PortraitUpsideDown, LandscapeLeft, LandscapeRight
   - `UIRequiresFullScreen = true` (отключает split view на iPad,
     фиксирует наш лок по ориентации)
@@ -37,8 +37,8 @@ Transporter CLI (`iTMSTransporter`).
     стандартного HTTPS, сразу проходит экспортный контроль в App Store Connect)
 
 Ориентации в самом приложении по-прежнему ограничены `SystemChrome`
-(главное меню / игра — только `portraitUp`, loading screen —
-`portraitUp` + `landscapeLeft/Right`).
+(главное меню / игра — только вертикальные `portraitUp/portraitDown`,
+loading screen — вертикальные + `landscapeLeft/Right`).
 
 ## 2. Зависимости и совместимость с iOS
 

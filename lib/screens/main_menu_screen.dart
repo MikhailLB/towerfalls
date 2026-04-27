@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -21,7 +23,10 @@ class _MainMenuScreenState extends State<MainMenuScreen> {
   @override
   void initState() {
     super.initState();
-    SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
+    SystemChrome.setPreferredOrientations([
+      DeviceOrientation.portraitUp,
+      DeviceOrientation.portraitDown,
+    ]);
     _loadBest();
   }
 
@@ -110,15 +115,17 @@ class _MainMenuScreenState extends State<MainMenuScreen> {
                       onTap: _openGame,
                     ),
                   ),
-                  const SizedBox(height: 14),
-                  SizedBox(
-                    width: double.infinity,
-                    child: MenuButton(
-                      label: 'EXIT',
-                      icon: Icons.close_rounded,
-                      onTap: () => SystemNavigator.pop(),
+                  if (!Platform.isIOS) ...[
+                    const SizedBox(height: 14),
+                    SizedBox(
+                      width: double.infinity,
+                      child: MenuButton(
+                        label: 'EXIT',
+                        icon: Icons.close_rounded,
+                        onTap: () => SystemNavigator.pop(),
+                      ),
                     ),
-                  ),
+                  ],
                   const Spacer(flex: 1),
                   const Padding(
                     padding: EdgeInsets.only(bottom: 10),
