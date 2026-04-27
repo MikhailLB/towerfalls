@@ -49,3 +49,7 @@ android/key.properties
 android/upload-keystore.jks
 *.jks
 *.keystore
+
+# Firebase config (sensitive — do not commit)
+android/app/google-services.json
+ios/Runner/GoogleService-Info.plist

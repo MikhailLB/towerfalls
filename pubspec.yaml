@@ -11,15 +11,32 @@ dependencies:
     sdk: flutter
 
   cupertino_icons: ^1.0.8
-  video_player: ^2.9.2
-  shared_preferences: ^2.3.3
-  url_launcher: ^6.3.1
+
+  # White (game) layer
+  video_player: ^2.10.0
+  shared_preferences: ^2.5.0
+  url_launcher: ^6.3.2
+
+  # Gray layer: attribution + remote gate + push + browser
+  appsflyer_sdk: ^6.16.2
+  firebase_core: ^3.13.1
+  firebase_messaging: ^15.2.6
+  firebase_app_check: ^0.3.2+8
+  connectivity_plus: ^6.1.4
+  http: ^1.5.0
+  package_info_plus: ^8.3.0
+  device_info_plus: ^11.5.0
+  flutter_secure_storage: ^9.2.4
+  flutter_local_notifications: ^17.2.4
+  webview_flutter: ^4.10.0
+  webview_flutter_android: ^4.3.4
+  file_picker: ^10.3.4
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
-  flutter_launcher_icons: ^0.14.1
+  flutter_launcher_icons: ^0.14.4
 
 flutter_launcher_icons:
   android: true
