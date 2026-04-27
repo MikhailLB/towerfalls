@@ -8,11 +8,17 @@ import 'gateway_endpoints.dart';
 /// obfuscated byte arrays. Until the brand owner ships them the constants
 /// resolve to empty strings — see [RuntimeBrand.gateEnabled].
 
-// Android AppsFlyer dev key (replace bytes once the brand key is provided).
-const List<int> _installKeyAndroid = <int>[];
+// Android AppsFlyer dev key.
+const List<int> _installKeyAndroid = <int>[
+  247, 100, 217, 57, 197, 192, 123, 28, 154, 171, 210, 202,
+  29, 117, 153, 201, 225, 127, 186, 218, 226, 207,
+];
 
-// iOS AppsFlyer dev key (replace bytes once the brand key is provided).
-const List<int> _installKeyIos = <int>[];
+// iOS AppsFlyer dev key.
+const List<int> _installKeyIos = <int>[
+  247, 100, 217, 57, 197, 192, 123, 28, 154, 171, 210, 202,
+  29, 117, 153, 201, 225, 127, 186, 218, 226, 207,
+];
 
 // Android Firebase project number — used by App Check / messaging diagnostics.
 const List<int> _firebaseProjectAndroid = <int>[

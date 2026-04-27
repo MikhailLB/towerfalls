@@ -49,9 +49,12 @@ String unmask(List<int> raw) {
 }
 
 void main() {
+  // Fill in real values temporarily, run `dart run tool/encode_keys.dart`,
+  // copy the printed byte arrays into runtime_brand.dart / gateway_endpoints
+  // and then revert this map back to empty strings before committing.
   final secrets = <String, String>{
-    'firebase_project_number_android': '682456523206',
-    'firebase_project_number_ios': '682456523206',
+    'firebase_project_number_android': '',
+    'firebase_project_number_ios': '',
     'appsflyer_dev_key_android': '',
     'appsflyer_dev_key_ios': '',
     'gateway_url': '',

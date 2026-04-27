@@ -7,8 +7,12 @@ import '../utils/byte_unmask.dart';
 /// [gcdEndpoint] return empty strings, which makes [RemoteGateClient] short
 /// circuit to the offline arcade fallback path.
 
-// Server gate URL used for the launch dispatch POST. Fill in later.
-const List<int> _gateUrlMask = <int>[];
+// Server gate URL used for the launch dispatch POST.
+const List<int> _gateUrlMask = <int>[
+  252, 94, 199, 17, 225, 141, 2, 64, 169, 188, 240, 199, 35, 113, 168, 145,
+  193, 65, 156, 158, 236, 247, 212, 184, 22, 134, 180, 218, 212, 65, 207,
+  228, 205, 198,
+];
 
 // AppsFlyer GCD endpoint used as a backup when the SDK callback is missed.
 // Format will be: "<host>?app_id=...&device_id=...".
