@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -46,6 +47,8 @@ class _BrowserShellState extends State<BrowserShell>
 
   Widget? _fullscreen;
   void Function()? _hideFullscreen;
+
+  StreamSubscription<RemoteMessage>? _pushSub;
 
   @override
   void initState() {
@@ -93,6 +96,37 @@ class _BrowserShellState extends State<BrowserShell>
         _maybeRouteOffline();
       }
     });
+
+    // Direct listener on onMessageOpenedApp. This catches the case where the
+    // user taps a notification while the browser is already visible — the
+    // PulseDispatch callback chain has an inherent race (callback may be null
+    // during the brief window between app resume and initState completing).
+    _pushSub = FirebaseMessaging.onMessageOpenedApp.listen((msg) {
+      final url = msg.data['url'] as String?;
+      debugPrint('[TF.WV] onMessageOpenedApp url=${url ?? 'null'}');
+      if (url != null && url.isNotEmpty && mounted) {
+        try {
+          final uri = Uri.parse(url);
+          if (uri.hasScheme) _wv.loadRequest(uri);
+        } catch (_) {}
+      }
+    });
+
+    // On first mount check if a push URL was stashed before BrowserShell
+    // was ready (e.g. notification tapped during app launch or while the
+    // loading splash was still on screen).
+    WidgetsBinding.instance.addPostFrameCallback((_) => _drainPushStash());
+  }
+
+  Future<void> _drainPushStash() async {
+    final url = await widget.cache.consumeOneShotPush();
+    if (url != null && url.isNotEmpty && mounted) {
+      debugPrint('[TF.WV] drainPushStash url=$url');
+      try {
+        final uri = Uri.parse(url);
+        if (uri.hasScheme) _wv.loadRequest(uri);
+      } catch (_) {}
+    }
   }
 
   void _lockOrientations() {
@@ -110,7 +144,15 @@ class _BrowserShellState extends State<BrowserShell>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) _applyFullscreen();
+    if (state == AppLifecycleState.resumed) {
+      _applyFullscreen();
+      // When the app comes back to foreground (user tapped a push notification
+      // while the browser was visible), onMessageOpenedApp fires and stashes
+      // the URL via _dispatchUrl. If the live onPushDestination callback
+      // already consumed it nothing is in the stash; if there's a race
+      // (callback set a frame late) we catch it here.
+      _drainPushStash();
+    }
   }
 
   NavigationDelegate _delegate() {
@@ -419,6 +461,7 @@ class _BrowserShellState extends State<BrowserShell>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _connSub?.cancel();
+    _pushSub?.cancel();
     widget.pulse.onPushDestination = null;
     SystemChrome.setEnabledSystemUIMode(
       SystemUiMode.manual,
