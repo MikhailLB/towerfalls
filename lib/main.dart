@@ -27,6 +27,9 @@ Future<void> _bootFirebase() async {
       androidProvider: kDebugMode
           ? AndroidProvider.debug
           : AndroidProvider.playIntegrity,
+      appleProvider: kDebugMode
+          ? AppleProvider.debug
+          : AppleProvider.appAttestWithDeviceCheckFallback,
     );
   } catch (err) {
     if (kDebugMode) debugPrint('[BOOT] AppCheck skipped: $err');

@@ -20,10 +20,8 @@
 	     For local interactive builds "automatic" is enough. -->
 	<key>signingStyle</key>
 	<string>automatic</string>
-	<!--
 	<key>teamID</key>
-	<string>YOUR_TEAM_ID</string>
-	-->
+	<string>B3VL4G75L5</string>
 
 	<!-- Xcode 14+ can strip Swift / bitcode symbols automatically. -->
 	<key>stripSwiftSymbols</key>

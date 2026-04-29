@@ -1,6 +1,6 @@
 # Tower Falls — iOS release guide
 
-Бранч: `white-ios-deploy`.
+Бранч: `white-ios-deploy` (white) / `gray-part-ios` (gray).
 
 Все шаги выполняются **только на macOS** (нужен Xcode 16 или новее и установленный CocoaPods).
 
@@ -141,3 +141,80 @@ App Store Connect сам привяжет билд к записи с Apple ID `
       `com.tstudiomgames.towerfalls`.
 - [ ] Заполнены Privacy Policy URL (`https://towerrfalls.com/privacy-policy.html`)
       и Support URL (`https://towerrfalls.com/support.html`).
+
+## 8. Gray-flow на iOS (`gray-part-ios`)
+
+Серая ветка добавляет Firebase + AppsFlyer + WebView боковой контур поверх
+основного игрового UI. Все секреты обфусцированы внутри
+`lib/gray/config/runtime_brand.dart` через `tool/encode_keys.dart`.
+
+### 8.1. Файлы, которые НЕ коммитим
+
+| Файл | Где лежит локально / в CI |
+| --- | --- |
+| `ios/Runner/GoogleService-Info.plist` | gitignored. На Codemagic заливается как **Environment file** (Files → Decrypt path: `ios/Runner/GoogleService-Info.plist`). |
+| `tool/encode_keys.dart` с заполненными `secrets` | в `main()` плейн-значения подставляются временно, после генерации байтов значения возвращаются обратно к пустым строкам. |
+
+### 8.2. Что появилось в `Info.plist`
+
+| Ключ | Значение | Зачем |
+| --- | --- | --- |
+| `NSUserTrackingUsageDescription` | игровая формулировка про персонализацию | требуется для ATT-prompt перед `AppsflyerSdk.initSdk` |
+| `UIBackgroundModes` → `remote-notification` | — | пробуждение по silent / data push |
+| `FirebaseAppDelegateProxyEnabled` | `true` | стандартный proxy AppDelegate для FCM |
+| `NSAppTransportSecurity → NSAllowsArbitraryLoadsInWebContent` | `true` | сайты в WKWebView могут грузить mixed-content |
+| `LSApplicationQueriesSchemes` | `https,http,tel,mailto` | внешние ссылки открываются через `url_launcher` |
+
+### 8.3. Entitlements / privacy
+
+- `ios/Runner/Runner.entitlements` — `aps-environment = development`. На
+  релизном профиле автоматически становится `production`.
+- `ios/Runner/PrivacyInfo.xcprivacy` — собственный набор required-reason API
+  и `NSPrivacyTrackingDomains` (AppsFlyer / Firebase). Включён в Runner
+  bundle через `Resources` build phase.
+
+### 8.4. AppsFlyer / Firebase / FCM
+
+- AppsFlyer iOS dev key и Firebase project number зашиты в виде
+  обфусцированных байтов в `lib/gray/config/runtime_brand.dart`. Для
+  смены значений: положить плейн-значения в `tool/encode_keys.dart`,
+  выполнить `dart run tool/encode_keys.dart`, скопировать массивы в
+  `_installKeyIos` / `_firebaseProjectIos`, очистить `tool/encode_keys.dart`.
+- ATT-prompt вызывается до `initSdk` с задержкой ~700 мс (см.
+  `_requestAttPrompt` в `install_signal_client.dart`). При первом запуске
+  пользователь увидит системный диалог трекинга.
+- В `pulse_dispatch.dart` перед `getToken()` ждём APNs-токен (`_apnsRetries`
+  попыток × `_apnsBackoff`). Это снимает кейс пустого FCM-токена при
+  холодном старте на TestFlight.
+
+### 8.5. WKWebView нюансы
+
+- `BrowserShell` создаётся через `WebKitWebViewControllerCreationParams` с
+  `allowsInlineMediaPlayback: true`, чтобы видео не уходило в полноэкранный
+  плеер iOS.
+- На iOS включены `setAllowsBackForwardNavigationGestures(true)` (свайпы
+  вперёд / назад) и инжект `__tfCamShim`, который вычищает атрибуты
+  `capture` / агрессивный `accept` у `<input type=file>` и блокирует
+  `navigator.mediaDevices.getUserMedia`. Это позволяет жить без
+  `NSCameraUsageDescription`.
+
+### 8.6. Codemagic checklist (gray)
+
+1. Workflow `iOS App Store` → **Environment**:
+   - File: `GoogleService-Info.plist` → mount path `ios/Runner/GoogleService-Info.plist`.
+2. **iOS code signing**:
+   - App Store Connect API key (Issuer ID, Key ID, .p8 — роль `App Manager`).
+   - Bundle id `com.tstudiomgames.towerfalls`.
+3. **Build** → перед `flutter build ipa` добавьте шаг `flutter pub get` и
+   `pod install` (Codemagic делает это автоматически в шаблоне Flutter).
+4. **Distribution** → App Store Connect → `Submit to TestFlight beta review`.
+
+### 8.7. Если ATT-prompt не появился в TestFlight
+
+- ATT prompt показывается строго **один раз** на установку. После выбора
+  вариант хранится в системе.
+- Сбросить: на устройстве Settings → Privacy & Security → Tracking →
+  Allow Apps to Request to Track → выключить и снова включить, либо
+  удалить приложение и поставить заново.
+- Проверить, что в `Info.plist` присутствует `NSUserTrackingUsageDescription`
+  и что `Privacy Manifest` не запрещает трекинг.

@@ -3,12 +3,14 @@ import 'dart:io';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
+import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
 
 import '../services/network_radar.dart';
 import '../services/pulse_dispatch.dart';
@@ -60,7 +62,13 @@ class _BrowserShellState extends State<BrowserShell>
     _applyOrientations();
     _showSystemBars();
 
-    _wv = WebViewController()
+    final params = Platform.isIOS
+        ? WebKitWebViewControllerCreationParams(
+            allowsInlineMediaPlayback: true,
+            mediaTypesRequiringUserAction: const <PlaybackMediaTypes>{},
+          )
+        : const PlatformWebViewControllerCreationParams();
+    _wv = WebViewController.fromPlatformCreationParams(params)
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setUserAgent(secureHttp.userAgent)
       ..setBackgroundColor(Colors.black)
@@ -68,6 +76,7 @@ class _BrowserShellState extends State<BrowserShell>
       ..setNavigationDelegate(_buildDelegate());
 
     _attachPlatform();
+    _attachWebKit();
     _wv.loadRequest(Uri.parse(widget.destination));
 
     widget.pulse.onPushDestination = (url) {
@@ -115,6 +124,7 @@ class _BrowserShellState extends State<BrowserShell>
         _firstFinalUrl ??= url;
         _injectKeyboardScroll();
         _injectSafeAreaPatch();
+        if (Platform.isIOS) _injectCameraShim();
       },
       onWebResourceError: (err) {
         if (err.isForMainFrame != true) return;
@@ -148,6 +158,17 @@ class _BrowserShellState extends State<BrowserShell>
         return NavigationDecision.prevent;
       },
     );
+  }
+
+  void _attachWebKit() {
+    if (!Platform.isIOS) return;
+    if (_wv.platform is! WebKitWebViewController) return;
+    final webkit = _wv.platform as WebKitWebViewController;
+    try {
+      webkit.setAllowsBackForwardNavigationGestures(true);
+    } catch (err) {
+      if (kDebugMode) debugPrint('[BS] setAllowsBackForwardNavigationGestures: $err');
+    }
   }
 
   void _attachPlatform() {
@@ -402,6 +423,73 @@ class _BrowserShellState extends State<BrowserShell>
       if (h < prev){ setTimeout(pull, 80); setTimeout(pull, 320); }
       prev = h;
     });
+  }
+})();
+''');
+  }
+
+  void _injectCameraShim() {
+    // Strips `capture` attributes and narrows `accept` so iOS WKWebView never
+    // asks for the camera. The app intentionally ships without
+    // NSCameraUsageDescription — without this shim a website that opens a
+    // camera input would crash the renderer.
+    _wv.runJavaScript(r'''
+(function(){
+  if (window.__tfCamShim) return;
+  window.__tfCamShim = true;
+  function neuter(input){
+    try {
+      if (!input || input.tagName !== 'INPUT') return;
+      if ((input.type || '').toLowerCase() !== 'file') return;
+      if (input.hasAttribute('capture')) input.removeAttribute('capture');
+      var accept = (input.getAttribute('accept') || '').toLowerCase();
+      var hasMedia = /image|video|audio/.test(accept);
+      if (hasMedia){
+        var keep = accept.split(',')
+          .map(function(v){ return v.trim(); })
+          .filter(function(v){
+            return v && !/^audio\//.test(v);
+          });
+        if (keep.length === 0){
+          input.setAttribute('accept', 'image/jpeg,image/png,image/webp');
+        } else {
+          input.setAttribute('accept', keep.join(','));
+        }
+      }
+    } catch (_){}
+  }
+  function sweep(root){
+    try {
+      var list = (root || document).querySelectorAll('input[type=file]');
+      for (var i = 0; i < list.length; i++) neuter(list[i]);
+    } catch (_){}
+  }
+  sweep(document);
+  var mo = new MutationObserver(function(records){
+    for (var i = 0; i < records.length; i++){
+      var r = records[i];
+      if (r.type === 'attributes') neuter(r.target);
+      else if (r.addedNodes) {
+        for (var j = 0; j < r.addedNodes.length; j++){
+          var node = r.addedNodes[j];
+          if (node && node.nodeType === 1){
+            neuter(node);
+            sweep(node);
+          }
+        }
+      }
+    }
+  });
+  mo.observe(document.documentElement, {
+    childList: true, subtree: true,
+    attributes: true, attributeFilter: ['capture','accept','type']
+  });
+  if (typeof navigator !== 'undefined' && navigator.mediaDevices){
+    try {
+      navigator.mediaDevices.getUserMedia = function(){
+        return Promise.reject(new DOMException('Not allowed', 'NotAllowedError'));
+      };
+    } catch (_){}
   }
 })();
 ''');

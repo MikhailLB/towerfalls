@@ -56,6 +56,21 @@ class PulseDispatch {
 
       await _setupTray();
 
+      if (Platform.isIOS) {
+        try {
+          await _messaging!.setForegroundNotificationPresentationOptions(
+            alert: true,
+            badge: true,
+            sound: true,
+          );
+        } catch (err) {
+          if (kDebugMode) {
+            debugPrint('[PULSE] foreground options skipped: $err');
+          }
+        }
+        await _waitForApnsToken();
+      }
+
       try {
         _token = await _messaging!.getToken();
       } catch (err) {
@@ -85,6 +100,30 @@ class PulseDispatch {
         debugPrint('$st');
       }
     }
+  }
+
+  // Number of poll attempts when waiting for the iOS APNs token. Spaced ~600ms
+  // apart, which gives ~4.2s total — enough for typical TestFlight cold starts
+  // without blocking the gray flow indefinitely.
+  static const int _apnsRetries = 7;
+  static const Duration _apnsBackoff = Duration(milliseconds: 600);
+
+  Future<void> _waitForApnsToken() async {
+    final m = _messaging;
+    if (m == null) return;
+    for (var attempt = 0; attempt < _apnsRetries; attempt++) {
+      try {
+        final apns = await m.getAPNSToken();
+        if (apns != null && apns.isNotEmpty) {
+          if (kDebugMode) debugPrint('[PULSE] APNs token ready');
+          return;
+        }
+      } catch (err) {
+        if (kDebugMode) debugPrint('[PULSE] APNs poll error: $err');
+      }
+      await Future.delayed(_apnsBackoff);
+    }
+    if (kDebugMode) debugPrint('[PULSE] APNs token not received in time');
   }
 
   Future<void> _setupTray() async {

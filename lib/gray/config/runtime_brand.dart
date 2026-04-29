@@ -16,8 +16,8 @@ const List<int> _installKeyAndroid = <int>[
 
 // iOS AppsFlyer dev key.
 const List<int> _installKeyIos = <int>[
-  247, 100, 217, 57, 197, 192, 123, 28, 154, 171, 210, 202,
-  29, 117, 153, 201, 225, 127, 186, 218, 226, 207,
+  161, 76, 215, 48, 165, 206, 71, 41, 171, 176, 238, 210,
+  8, 68, 175, 190, 245, 73, 158, 244, 229, 250,
 ];
 
 // Android Firebase project number — used by App Check / messaging diagnostics.
@@ -27,7 +27,7 @@ const List<int> _firebaseProjectAndroid = <int>[
 
 // iOS Firebase project number.
 const List<int> _firebaseProjectIos = <int>[
-  162, 18, 129, 85, 167, 129, 24, 93, 238, 225, 183, 148,
+  160, 26, 129, 80, 171, 142, 30, 92, 228, 224, 181, 154,
 ];
 
 abstract final class RuntimeBrand {

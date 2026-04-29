@@ -2,8 +2,10 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:app_tracking_transparency/app_tracking_transparency.dart';
 import 'package:appsflyer_sdk/appsflyer_sdk.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 
 import '../config/gateway_endpoints.dart';
 import '../config/runtime_brand.dart';
@@ -22,6 +24,20 @@ class InstallSignalClient {
   bool _started = false;
 
   bool get started => _started;
+
+  Future<void> _requestAttPrompt() async {
+    try {
+      await WidgetsBinding.instance.endOfFrame;
+      await Future.delayed(const Duration(milliseconds: 700));
+      final status =
+          await AppTrackingTransparency.trackingAuthorizationStatus;
+      if (status == TrackingStatus.notDetermined) {
+        await AppTrackingTransparency.requestTrackingAuthorization();
+      }
+    } catch (err) {
+      if (kDebugMode) debugPrint('[ISC] ATT skipped: $err');
+    }
+  }
 
   Future<void> warmup() async {
     if (_started) return;
@@ -42,6 +58,9 @@ class InstallSignalClient {
 
     _started = true;
     try {
+      if (Platform.isIOS) {
+        await _requestAttPrompt();
+      }
       final opts = AppsFlyerOptions(
         afDevKey: devKey,
         appId: RuntimeBrand.iosAppId,
