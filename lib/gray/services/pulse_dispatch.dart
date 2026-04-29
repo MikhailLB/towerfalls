@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
@@ -42,67 +41,63 @@ class PulseDispatch {
   Future<void> bootstrap() async {
     if (_ready) return;
     try {
-      try {
-        await Firebase.initializeApp();
-      } catch (err) {
-        if (kDebugMode) {
-          debugPrint('[PULSE] Firebase init skipped: $err');
-        }
-        return;
-      }
-
+      // Firebase.initializeApp() is already called in main.dart#_bootFirebase
+      // before runApp. We must NOT call it again here — re-initialising raises
+      // "[core/duplicate-app]" in some firebase_core versions and the previous
+      // implementation caught that exception and silently `return`-ed, which
+      // skipped onMessage / onMessageOpenedApp registration entirely. That was
+      // exactly why notification taps never reached Dart on iOS.
       _messaging = FirebaseMessaging.instance;
-      FirebaseMessaging.onBackgroundMessage(_pulseBackgroundHandler);
 
+      FirebaseMessaging.onBackgroundMessage(_pulseBackgroundHandler);
       await _setupTray();
 
+      // Set foreground presentation options unconditionally (matches GR). The
+      // call is a no-op on Android.
+      try {
+        await _messaging!.setForegroundNotificationPresentationOptions(
+          alert: true,
+          badge: true,
+          sound: true,
+        );
+      } catch (err) {
+        debugPrint('[PULSE] foreground options skipped: $err');
+      }
+
+      // Attach listeners BEFORE awaiting any token / cold-start work so we
+      // never miss a foreground push that arrives during bootstrap.
+      _messaging!.onTokenRefresh.listen((fresh) {
+        _token = fresh;
+        debugPrint('[PULSE] onTokenRefresh');
+        onTokenRotated?.call(fresh);
+      });
+      FirebaseMessaging.onMessage.listen(_onForeground);
+      FirebaseMessaging.onMessageOpenedApp.listen(_onTapInBackground);
+
       if (Platform.isIOS) {
-        try {
-          await _messaging!.setForegroundNotificationPresentationOptions(
-            alert: true,
-            badge: true,
-            sound: true,
-          );
-        } catch (err) {
-          if (kDebugMode) {
-            debugPrint('[PULSE] foreground options skipped: $err');
-          }
-        }
         await _waitForApnsToken();
       }
 
       try {
-        _token = await _messaging!
-            .getToken()
-            .timeout(const Duration(seconds: 3));
+        _token = await _messaging!.getToken();
       } catch (err) {
         debugPrint('[PULSE] getToken failed: $err');
       }
 
-      _messaging!.onTokenRefresh.listen((fresh) {
-        _token = fresh;
-        onTokenRotated?.call(fresh);
-      });
-
-      FirebaseMessaging.onMessage.listen(_onForeground);
-      FirebaseMessaging.onMessageOpenedApp.listen(_onTapInBackground);
-
-      final cold = await _messaging!
-          .getInitialMessage()
-          .timeout(const Duration(seconds: 3), onTimeout: () => null);
-      if (cold != null) _onColdStart(cold);
+      try {
+        final cold = await _messaging!.getInitialMessage();
+        if (cold != null) _onColdStart(cold);
+      } catch (err) {
+        debugPrint('[PULSE] getInitialMessage failed: $err');
+      }
 
       _ready = true;
-      if (kDebugMode) {
-        debugPrint(
-          '[PULSE] bootstrap OK, token=${_token == null ? 'null' : '${_token!.substring(0, _token!.length.clamp(0, 12))}…'}',
-        );
-      }
+      debugPrint(
+        '[PULSE] bootstrap OK, token=${_token == null ? 'null' : '${_token!.substring(0, _token!.length.clamp(0, 12))}…'}',
+      );
     } catch (err, st) {
-      if (kDebugMode) {
-        debugPrint('[PULSE] bootstrap failed: $err');
-        debugPrint('$st');
-      }
+      debugPrint('[PULSE] bootstrap failed: $err');
+      debugPrint('$st');
     }
   }
 
