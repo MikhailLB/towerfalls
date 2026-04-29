@@ -3,7 +3,6 @@ import 'dart:io';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -17,9 +16,6 @@ import '../services/runtime_cache.dart';
 import '../services/secure_http.dart';
 import 'network_pause_screen.dart';
 
-/// In-app browser used when the gateway returns a destination URL. Keeps the
-/// session sticky to the first landed page and routes external schemes via
-/// the OS so the experience matches a real mobile browser.
 class BrowserShell extends StatefulWidget {
   final String destination;
   final RuntimeCache cache;
@@ -55,9 +51,13 @@ class _BrowserShellState extends State<BrowserShell>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _applyOrientations();
-    _showSystemBars();
+    _lockOrientations();
+    _applyFullscreen();
 
+    // Platform-specific creation params for WebView. On iOS these MUST be
+    // passed at construction time — setters have no effect after init:
+    //   allowsInlineMediaPlayback: true  → <video> doesn't force fullscreen
+    //   mediaTypesRequiringUserAction: {} → muted autoplay works without tap
     late final PlatformWebViewControllerCreationParams params;
     if (Platform.isIOS) {
       params = WebKitWebViewControllerCreationParams(
@@ -69,114 +69,79 @@ class _BrowserShellState extends State<BrowserShell>
     } else {
       params = const PlatformWebViewControllerCreationParams();
     }
+
     _wv = WebViewController.fromPlatformCreationParams(params)
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setUserAgent(secureHttp.userAgent)
       ..setBackgroundColor(Colors.black)
       ..enableZoom(false)
-      ..setNavigationDelegate(_buildDelegate());
+      ..setNavigationDelegate(_delegate());
 
-    _attachPlatform();
-    _attachWebKit();
+    _setupPlatform();
     _wv.loadRequest(Uri.parse(widget.destination));
 
     widget.pulse.onPushDestination = (url) {
-      if (!mounted) {
-        debugPrint('[TF.WV] push url ignored — shell not mounted: $url');
-        return;
-      }
-      debugPrint('[TF.WV] loading push url=$url');
+      if (!mounted) return;
       try {
         final uri = Uri.parse(url);
-        if (!uri.hasScheme) {
-          debugPrint('[TF.WV] push url has no scheme, skipping: $url');
-          return;
-        }
-        _wv.loadRequest(uri);
-      } catch (err) {
-        debugPrint('[TF.WV] failed to load push url=$url: $err');
-      }
+        if (uri.hasScheme) _wv.loadRequest(uri);
+      } catch (_) {}
     };
 
     _connSub = widget.radar.watch().listen((statuses) {
-      final allGone = statuses.every((s) => s == ConnectivityResult.none);
-      if (allGone) _maybeRouteOffline();
+      if (statuses.every((s) => s == ConnectivityResult.none)) {
+        _maybeRouteOffline();
+      }
     });
   }
 
-  void _applyOrientations() {
-    // Empty list delegates rotation to the Android activity. The activity is
-    // marked as fullUser: it auto-rotates when the user enables auto-rotate
-    // and lets Android show the native rotate suggestion when the setting is
-    // disabled on devices that support that system feature.
-    SystemChrome.setPreferredOrientations(const []);
+  void _lockOrientations() {
+    SystemChrome.setPreferredOrientations(const [
+      DeviceOrientation.portraitUp,
+      DeviceOrientation.portraitDown,
+      DeviceOrientation.landscapeLeft,
+      DeviceOrientation.landscapeRight,
+    ]);
   }
 
-  void _showSystemBars() {
-    // Keep system bars visible in the WebView. Android's native rotate
-    // suggestion then appears in the navigation area instead of floating over
-    // the web content and blocking controls.
-    SystemChrome.setEnabledSystemUIMode(
-      SystemUiMode.manual,
-      overlays: SystemUiOverlay.values,
-    );
+  void _applyFullscreen() {
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) _showSystemBars();
+    if (state == AppLifecycleState.resumed) _applyFullscreen();
   }
 
-  NavigationDelegate _buildDelegate() {
+  NavigationDelegate _delegate() {
     return NavigationDelegate(
-      onPageStarted: (url) {
-        debugPrint('[TF.WV] onPageStarted url=$url');
+      onPageStarted: (_) {
         if (mounted) setState(() => _loading = true);
       },
       onPageFinished: (url) {
-        debugPrint('[TF.WV] onPageFinished url=$url');
         if (mounted) setState(() => _loading = false);
         _redirectRetries = 0;
         _firstFinalUrl ??= url;
+        _injectSafeAreaShim();
         _injectKeyboardScroll();
-        _injectSafeAreaPatch();
-        _injectMediaAutoplayShim();
-        if (Platform.isIOS) {
-          _injectCameraShim();
-          _injectInputZoomGuard();
-        }
+        _injectMediaAutoplay();
+        _injectCameraBlocker();
       },
       onWebResourceError: (err) {
         if (err.isForMainFrame != true) return;
         final desc = err.description.toLowerCase();
-        debugPrint(
-          '[TF.WV] resource error code=${err.errorCode} type=${err.errorType} '
-          'mainFrame=${err.isForMainFrame} desc=$desc',
-        );
         final loop = desc.contains('too_many_redirects') ||
             desc.contains('too many redirects') ||
             err.errorCode == -1007 ||
             err.errorCode == -9;
         if (loop && _lastMainFrame != null && _redirectRetries < 3) {
           _redirectRetries++;
-          // Bouncing the same URL into a redirect loop never resolves itself —
-          // strip query params and try once, then fall back to the original
-          // destination (config URL) so the user is never stuck on a blank
-          // page after a malformed push payload.
-          final next = _redirectRetries < 2
-              ? _lastMainFrame!
-              : widget.destination;
-          debugPrint('[TF.WV] redirect loop retry #$_redirectRetries → $next');
-          _wv.loadRequest(Uri.parse(next));
+          _wv.loadRequest(Uri.parse(_lastMainFrame!));
           return;
         }
         _maybeRouteOffline();
       },
-      onHttpError: (err) {
-        debugPrint(
-          '[TF.WV] http error status=${err.response?.statusCode}',
-        );
-      },
+      onHttpError: (_) {},
       onNavigationRequest: (req) {
         final uri = Uri.tryParse(req.url);
         if (uri == null) return NavigationDecision.prevent;
@@ -187,77 +152,56 @@ class _BrowserShellState extends State<BrowserShell>
             scheme == 'data' ||
             scheme == 'blob';
         if (inApp) {
-          if (req.isMainFrame) {
-            _lastMainFrame = req.url;
-            debugPrint('[TF.WV] navigate mainFrame=$scheme url=${req.url}');
-          }
+          if (req.isMainFrame) _lastMainFrame = req.url;
           return NavigationDecision.navigate;
         }
-        debugPrint('[TF.WV] external scheme=$scheme url=${req.url}');
         _launchExternal(uri);
         return NavigationDecision.prevent;
       },
     );
   }
 
-  void _attachWebKit() {
-    if (!Platform.isIOS) return;
-    if (_wv.platform is! WebKitWebViewController) return;
-    final webkit = _wv.platform as WebKitWebViewController;
-    try {
-      webkit.setAllowsBackForwardNavigationGestures(true);
-    } catch (err) {
-      if (kDebugMode) debugPrint('[BS] setAllowsBackForwardNavigationGestures: $err');
+  void _setupPlatform() {
+    if (Platform.isIOS && _wv.platform is WebKitWebViewController) {
+      (_wv.platform as WebKitWebViewController)
+          .setAllowsBackForwardNavigationGestures(true);
     }
-  }
-
-  void _attachPlatform() {
-    if (!Platform.isAndroid) return;
-    if (_wv.platform is! AndroidWebViewController) return;
-    final android = _wv.platform as AndroidWebViewController;
-
-    android.setMediaPlaybackRequiresUserGesture(false);
-    android.setOnShowFileSelector(_pickFiles);
-
-    android.setOnPlatformPermissionRequest(
-      (PlatformWebViewPermissionRequest request) {
-        final drmOnly = request.types.every(
+    if (Platform.isAndroid && _wv.platform is AndroidWebViewController) {
+      final android = _wv.platform as AndroidWebViewController;
+      android.setMediaPlaybackRequiresUserGesture(false);
+      android.setOnShowFileSelector(_pickFiles);
+      android.setOnPlatformPermissionRequest((req) {
+        final drmOnly = req.types.every(
           (t) =>
               t == AndroidWebViewPermissionResourceType.protectedMediaId ||
               t == AndroidWebViewPermissionResourceType.midiSysex,
         );
-        if (drmOnly) {
-          request.grant();
-        } else {
-          request.deny();
-        }
-      },
-    );
-
-    android.setCustomWidgetCallbacks(
-      onShowCustomWidget: (Widget overlay, void Function() hideCallback) {
-        _hideFullscreen = hideCallback;
-        if (mounted) setState(() => _fullscreen = overlay);
-      },
-      onHideCustomWidget: () {
-        _hideFullscreen = null;
-        if (mounted) setState(() => _fullscreen = null);
-      },
-    );
-
-    final cookies = AndroidWebViewCookieManager(
-      AndroidWebViewCookieManagerCreationParams
-          .fromPlatformWebViewCookieManagerCreationParams(
-        const PlatformWebViewCookieManagerCreationParams(),
-      ),
-    );
-    cookies.setAcceptThirdPartyCookies(android, true);
+        drmOnly ? req.grant() : req.deny();
+      });
+      android.setCustomWidgetCallbacks(
+        onShowCustomWidget: (w, hide) {
+          _hideFullscreen = hide;
+          if (mounted) setState(() => _fullscreen = w);
+        },
+        onHideCustomWidget: () {
+          _hideFullscreen = null;
+          if (mounted) setState(() => _fullscreen = null);
+        },
+      );
+      final cookies = AndroidWebViewCookieManager(
+        AndroidWebViewCookieManagerCreationParams
+            .fromPlatformWebViewCookieManagerCreationParams(
+          const PlatformWebViewCookieManagerCreationParams(),
+        ),
+      );
+      cookies.setAcceptThirdPartyCookies(android, true);
+    }
   }
 
-  Future<List<String>> _pickFiles(FileSelectorParams params) async {
+  Future<List<String>> _pickFiles(FileSelectorParams p) async {
     try {
       final result = await FilePicker.platform.pickFiles(
-        allowMultiple: params.mode == FileSelectorMode.openMultiple,
+        allowMultiple: p.mode == FileSelectorMode.openMultiple,
         type: FileType.any,
       );
       if (result == null) return const [];
@@ -301,197 +245,71 @@ class _BrowserShellState extends State<BrowserShell>
   void _injectKeyboardScroll() {
     _wv.runJavaScript(r'''
 (function(){
-  if (window.__tfKbScroll) return;
-  window.__tfKbScroll = true;
-  var STYLE_ID = '__tfKbScrollStyle';
-  function applyKbPadding(){
-    var vp = window.visualViewport;
-    var bottom = 0;
-    if (vp){
-      bottom = Math.max(0, window.innerHeight - (vp.height + vp.offsetTop));
-    }
-    document.documentElement.style.setProperty('--tf-keyboard-bottom', bottom + 'px');
-    var st = document.getElementById(STYLE_ID);
-    if (!st){
-      st = document.createElement('style');
-      st.id = STYLE_ID;
-      st.textContent = 'html,body{scroll-padding-bottom:calc(var(--tf-keyboard-bottom,0px) + 96px)!important;}';
-      (document.head || document.documentElement).appendChild(st);
-    }
-  }
-  function isInput(n){
-    return n && (n.tagName === 'INPUT' || n.tagName === 'TEXTAREA' || n.isContentEditable);
-  }
-  function pull(){
-    applyKbPadding();
+  if (window.__tfKbFix) return;
+  window.__tfKbFix = true;
+  function inputLike(n){ return n && (n.tagName==='INPUT' || n.tagName==='TEXTAREA' || n.isContentEditable); }
+  function focusRoll(){
     var el = document.activeElement;
-    if (!isInput(el)) return;
+    if (!inputLike(el)) return;
     var vp = window.visualViewport;
     if (vp){
-      var rect = el.getBoundingClientRect();
-      if (rect.bottom > vp.offsetTop + vp.height - 88 || rect.top < vp.offsetTop + 16){
-        el.scrollIntoView({behavior:'smooth', block:'center'});
+      var r = el.getBoundingClientRect();
+      if (r.bottom > vp.offsetTop + vp.height - 20 || r.top < vp.offsetTop){
+        el.scrollIntoView({ behavior:'smooth', block:'center' });
       }
     } else {
-      el.scrollIntoView({behavior:'smooth', block:'center'});
+      el.scrollIntoView({ behavior:'smooth', block:'center' });
     }
   }
   document.addEventListener('focusin', function(e){
-    if (isInput(e.target)){
-      setTimeout(pull, 220);
-      setTimeout(pull, 480);
-      setTimeout(pull, 820);
+    if (inputLike(e.target)){
+      setTimeout(focusRoll,250);
+      setTimeout(focusRoll,500);
+      setTimeout(focusRoll,800);
     }
   });
   if (window.visualViewport){
     var prev = window.visualViewport.height;
     window.visualViewport.addEventListener('resize', function(){
       var h = window.visualViewport.height;
-      applyKbPadding();
-      if (h < prev){ setTimeout(pull, 80); setTimeout(pull, 320); setTimeout(pull, 700); }
+      if (h < prev){ setTimeout(focusRoll,80); setTimeout(focusRoll,300); }
       prev = h;
     });
-    window.visualViewport.addEventListener('scroll', applyKbPadding);
   }
-  applyKbPadding();
 })();
 ''');
   }
 
-  // iOS WKWebView automatically zooms the page when the user focuses an
-  // <input>/<textarea> with computed font-size < 16px (especially noticeable in
-  // landscape, where the zoom often hides the keyboard or shifts content).
-  // Two-pronged guard:
-  //  * patch the viewport meta tag with maximum-scale=1.0 so iOS suppresses the
-  //    focus zoom (honored on iOS 10+).
-  //  * raise the form control font-size to 16px so the heuristic does not even
-  //    trigger if some script later overrides the meta tag.
-  void _injectInputZoomGuard() {
+  void _injectCameraBlocker() {
     _wv.runJavaScript(r'''
 (function(){
-  if (window.__tfNoZoom) return;
-  window.__tfNoZoom = true;
-  var STYLE_ID = '__tfNoZoomStyle';
-  function patchViewport(){
-    var meta = document.querySelector('meta[name="viewport"]');
-    if (!meta){
-      meta = document.createElement('meta');
-      meta.setAttribute('name', 'viewport');
-      meta.setAttribute('content',
-        'width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover');
-      (document.head || document.documentElement).appendChild(meta);
-      return;
+  if (window.__tfNoCam) return;
+  window.__tfNoCam = true;
+  function strip(el){
+    if (!el || el.tagName !== 'INPUT') return;
+    if ((el.type || '').toLowerCase() !== 'file') return;
+    if (el.hasAttribute('capture')) el.removeAttribute('capture');
+    var accept = (el.getAttribute('accept') || '').toLowerCase();
+    if (accept.indexOf('video') !== -1 || accept.indexOf('audio') !== -1){
+      el.setAttribute('accept', 'image/*');
     }
-    var c = meta.getAttribute('content') || '';
-    if (!/maximum-scale\s*=/i.test(c)){
-      c = (c ? c + ', ' : '') + 'maximum-scale=1.0';
-    } else {
-      c = c.replace(/maximum-scale\s*=\s*[\d.]+/ig, 'maximum-scale=1.0');
-    }
-    if (!/initial-scale\s*=/i.test(c)){
-      c = (c ? c + ', ' : '') + 'initial-scale=1.0';
-    }
-    meta.setAttribute('content', c);
   }
-  function patchStyle(){
-    var st = document.getElementById(STYLE_ID);
-    if (st) return;
-    st = document.createElement('style');
-    st.id = STYLE_ID;
-    st.textContent =
-      'input,select,textarea{font-size:16px!important;-webkit-text-size-adjust:100%!important;}';
-    (document.head || document.documentElement).appendChild(st);
+  function sweep(){
+    var nodes = document.querySelectorAll('input[type=file]');
+    for (var i = 0; i < nodes.length; i++) strip(nodes[i]);
   }
-  patchViewport();
-  patchStyle();
-  var mo = new MutationObserver(function(){
-    patchViewport();
-    patchStyle();
-  });
-  try { mo.observe(document.documentElement, {childList:true, subtree:true}); } catch(_){}
-})();
-''');
-  }
-
-  void _injectMediaAutoplayShim() {
-    _wv.runJavaScript(r'''
-(function(){
-  if (window.__tfVideoAuto) return;
-  window.__tfVideoAuto = true;
-  function prep(v){
-    try {
-      v.setAttribute('playsinline', '');
-      v.setAttribute('webkit-playsinline', '');
-      v.playsInline = true;
-      v.muted = true;
-      v.defaultMuted = true;
-      v.autoplay = true;
-      var p = v.play && v.play();
-      if (p && p.catch) p.catch(function(){});
-    } catch(_){}
-  }
-  function sweep(root){
-    try {
-      var list = (root || document).querySelectorAll('video');
-      for (var i = 0; i < list.length; i++) prep(list[i]);
-    } catch(_){}
-  }
-  sweep(document);
-  document.addEventListener('touchend', function(){ sweep(document); }, {passive:true});
-  var mo = new MutationObserver(function(records){
-    for (var i = 0; i < records.length; i++){
-      var nodes = records[i].addedNodes || [];
-      for (var j = 0; j < nodes.length; j++){
-        var n = nodes[j];
+  sweep();
+  var mo = new MutationObserver(function(muts){
+    for (var i = 0; i < muts.length; i++){
+      var m = muts[i];
+      if (m.type === 'attributes'){ strip(m.target); continue; }
+      for (var j = 0; j < m.addedNodes.length; j++){
+        var n = m.addedNodes[j];
         if (!n || n.nodeType !== 1) continue;
-        if (n.tagName === 'VIDEO') prep(n);
-        sweep(n);
-      }
-    }
-  });
-  mo.observe(document.documentElement, {childList:true, subtree:true});
-  setInterval(function(){ sweep(document); }, 1500);
-})();
-''');
-  }
-
-  void _injectCameraShim() {
-    // Strips `capture` attributes and blocks getUserMedia so a site's
-    // "camera" button falls back to file/photo selection instead of killing
-    // the app with an iOS privacy exception.
-    _wv.runJavaScript(r'''
-(function(){
-  if (window.__tfCamShim) return;
-  window.__tfCamShim = true;
-  function neuter(input){
-    try {
-      if (!input || input.tagName !== 'INPUT') return;
-      if ((input.type || '').toLowerCase() !== 'file') return;
-      if (input.hasAttribute('capture')) input.removeAttribute('capture');
-      var accept = (input.getAttribute('accept') || '').toLowerCase();
-      if (accept.indexOf('video') !== -1 || accept.indexOf('audio') !== -1){
-        input.setAttribute('accept', 'image/*');
-      }
-    } catch (_){}
-  }
-  function sweep(root){
-    try {
-      var list = (root || document).querySelectorAll('input[type=file]');
-      for (var i = 0; i < list.length; i++) neuter(list[i]);
-    } catch (_){}
-  }
-  sweep(document);
-  var mo = new MutationObserver(function(records){
-    for (var i = 0; i < records.length; i++){
-      var r = records[i];
-      if (r.type === 'attributes') neuter(r.target);
-      else if (r.addedNodes) {
-        for (var j = 0; j < r.addedNodes.length; j++){
-          var node = r.addedNodes[j];
-          if (node && node.nodeType === 1){
-            neuter(node);
-            sweep(node);
-          }
+        strip(n);
+        if (n.querySelectorAll){
+          var sub = n.querySelectorAll('input[type=file]');
+          for (var k = 0; k < sub.length; k++) strip(sub[k]);
         }
       }
     }
@@ -501,16 +319,13 @@ class _BrowserShellState extends State<BrowserShell>
     attributes: true, attributeFilter: ['capture','accept','type']
   });
   try {
-    var blocked = function(){
-      return Promise.reject(new DOMException('Not allowed', 'NotAllowedError'));
-    };
+    var blocked = function(){ return Promise.reject(new DOMException('NotAllowedError')); };
     if (navigator.mediaDevices){
       navigator.mediaDevices.getUserMedia = blocked;
       navigator.mediaDevices.getDisplayMedia = blocked;
     } else {
       Object.defineProperty(navigator, 'mediaDevices', {
-        configurable: true,
-        value: { getUserMedia: blocked, getDisplayMedia: blocked }
+        configurable: true, value: { getUserMedia: blocked, getDisplayMedia: blocked }
       });
     }
     if (navigator.getUserMedia) navigator.getUserMedia = function(_, __, err){
@@ -521,12 +336,12 @@ class _BrowserShellState extends State<BrowserShell>
 ''');
   }
 
-  void _injectSafeAreaPatch() {
+  void _injectSafeAreaShim() {
     _wv.runJavaScript(r'''
 (function(){
-  if (window.__tfSafeShim) return;
-  window.__tfSafeShim = true;
-  var ID = '__tfSafeShim';
+  if (window.__tfSaShim) return;
+  window.__tfSaShim = true;
+  var ID = '__tfSaShim';
   var CSS = ':root{'
     + '--safe-area-inset-top:0px!important;'
     + '--safe-area-inset-right:0px!important;'
@@ -537,33 +352,65 @@ class _BrowserShellState extends State<BrowserShell>
     + '--safe-top:0px!important;--safe-right:0px!important;'
     + '--safe-bottom:0px!important;--safe-left:0px!important;'
     + '}'
-    + 'html,body,#root,#app,#__nuxt,#__layout,.gameview-mobile-header{'
+    + 'html,body,#__nuxt,#__layout,#app,#root,.gameview-mobile-header{'
     + 'padding-top:0!important;padding-left:0!important;padding-right:0!important;margin-top:0!important;'
     + '}';
-  function paint(){
+  function apply(){
     var head = document.head || document.documentElement;
     if (!head) return;
-    var meta = document.querySelector('meta[name="viewport"]');
-    if (meta && !/viewport-fit\s*=\s*contain/i.test(meta.getAttribute('content') || '')){
-      var c = (meta.getAttribute('content') || '').replace(/,?\s*viewport-fit\s*=\s*\w+/ig,'').trim();
-      meta.setAttribute('content', c + (c ? ', ' : '') + 'viewport-fit=contain');
+    var vp = document.querySelector('meta[name="viewport"]');
+    if (vp && !/viewport-fit\s*=\s*contain/i.test(vp.getAttribute('content') || '')){
+      var c = (vp.getAttribute('content') || '').replace(/,?\s*viewport-fit\s*=\s*\w+/ig,'').trim();
+      vp.setAttribute('content', c + (c ? ', ' : '') + 'viewport-fit=contain');
     }
     var s = document.getElementById(ID);
     if (!s){ s = document.createElement('style'); s.id = ID; head.appendChild(s); }
     if (s.textContent !== CSS) s.textContent = CSS;
     if (head.lastElementChild !== s) head.appendChild(s);
   }
-  paint();
-  ['pushState', 'replaceState'].forEach(function(name){
+  apply();
+  ['pushState','replaceState'].forEach(function(name){
     var orig = history[name];
     history[name] = function(){
       var r = orig.apply(this, arguments);
-      setTimeout(paint, 80); setTimeout(paint, 400);
+      setTimeout(apply,80); setTimeout(apply,400);
       return r;
     };
   });
-  window.addEventListener('popstate', function(){ setTimeout(paint, 80); });
-  setInterval(paint, 2500);
+  window.addEventListener('popstate', function(){ setTimeout(apply,80); });
+  setInterval(apply, 2500);
+})();
+''');
+  }
+
+  void _injectMediaAutoplay() {
+    _wv.runJavaScript(r'''
+(function(){
+  if (window.__tfVideoAuto) return;
+  window.__tfVideoAuto = true;
+  function prep(v){
+    try {
+      v.setAttribute('playsinline',''); v.setAttribute('webkit-playsinline','');
+      v.playsInline=true; v.muted=true; v.defaultMuted=true; v.autoplay=true;
+      var p=v.play&&v.play(); if(p&&p.catch)p.catch(function(){});
+    } catch(_){}
+  }
+  function sweep(root){
+    try { var l=(root||document).querySelectorAll('video'); for(var i=0;i<l.length;i++)prep(l[i]); }catch(_){}
+  }
+  sweep(document);
+  document.addEventListener('touchend',function(){sweep(document);},{passive:true});
+  var mo=new MutationObserver(function(recs){
+    for(var i=0;i<recs.length;i++){
+      var nodes=recs[i].addedNodes||[];
+      for(var j=0;j<nodes.length;j++){
+        var n=nodes[j]; if(!n||n.nodeType!==1)continue;
+        if(n.tagName==='VIDEO')prep(n); sweep(n);
+      }
+    }
+  });
+  mo.observe(document.documentElement,{childList:true,subtree:true});
+  setInterval(function(){sweep(document);},1500);
 })();
 ''');
   }
@@ -577,11 +424,11 @@ class _BrowserShellState extends State<BrowserShell>
       SystemUiMode.manual,
       overlays: SystemUiOverlay.values,
     );
-    _applyOrientations();
+    _lockOrientations();
     super.dispose();
   }
 
-  Future<bool> _onBack() async {
+  Future<bool> _handleBack() async {
     if (_fullscreen != null) {
       _hideFullscreen?.call();
       return false;
@@ -596,78 +443,57 @@ class _BrowserShellState extends State<BrowserShell>
         }
         await _wv.goBack();
       }
-    } catch (err) {
-      debugPrint('[TF.WV] back navigation failed: $err');
-    }
+    } catch (_) {}
     return false;
   }
 
   @override
   Widget build(BuildContext context) {
+    final media = MediaQuery.of(context);
+    final safe = media.viewPadding;
+    final isLandscape =
+        MediaQuery.orientationOf(context) == Orientation.landscape;
+
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) async {
-        if (!didPop) await _onBack();
+        if (!didPop) await _handleBack();
       },
       child: Scaffold(
         backgroundColor: Colors.black,
         resizeToAvoidBottomInset: false,
-        // OrientationBuilder forces a rebuild on every rotation so the
-        // computed safe-area / chip bar are recalculated for the new
-        // orientation instead of reusing the portrait values.
-        body: OrientationBuilder(
-          builder: (context, orientation) {
-            final media = MediaQuery.of(context);
-            // viewPadding (not viewInsets.bottom) keeps safe-area insets
-            // stable even when the soft keyboard is open. WKWebView resizes
-            // its content itself.
-            final safe = media.viewPadding;
-            final isLandscape = orientation == Orientation.landscape;
-            // Reserve a small bar at the top for the floating back chip so it
-            // never overlaps the web content. In landscape we make it a touch
-            // shorter because vertical space is precious.
-            final chipBar = isLandscape ? 36.0 : 42.0;
-            final topPadding = safe.top + chipBar;
-            return Stack(
-              fit: StackFit.expand,
-              children: [
-                Padding(
-                  padding: EdgeInsets.only(
-                    top: topPadding,
-                    bottom: safe.bottom,
-                    left: safe.left,
-                    right: safe.right,
-                  ),
-                  child: WebViewWidget(controller: _wv),
-                ),
-                if (_loading)
-                  const ColoredBox(
-                    color: Colors.black,
-                    child: Center(
-                      child: SizedBox(
-                        width: 36,
-                        height: 36,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 3.0,
-                          valueColor: AlwaysStoppedAnimation<Color>(
-                            Color(0xFFFFC107),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                if (_fullscreen != null) Positioned.fill(child: _fullscreen!),
-                Positioned(
-                  left: safe.left + (isLandscape ? 6 : 10),
-                  top: safe.top + (isLandscape ? 2 : 4),
-                  child: _BackChip(
-                    compact: isLandscape,
-                    onTap: _onBack,
+        body: Stack(
+          fit: StackFit.expand,
+          children: [
+            Padding(
+              padding: EdgeInsets.only(
+                top: safe.top,
+                bottom: safe.bottom,
+                left: safe.left,
+                right: safe.right,
+              ),
+              child: WebViewWidget(controller: _wv),
+            ),
+            if (_loading)
+              Container(
+                color: Colors.black.withValues(alpha: 0.5),
+                child: const Center(
+                  child: CircularProgressIndicator(
+                    valueColor:
+                        AlwaysStoppedAnimation<Color>(Colors.cyanAccent),
                   ),
                 ),
-              ],
-            );
-          },
+              ),
+            if (_fullscreen != null) Positioned.fill(child: _fullscreen!),
+            Positioned(
+              left: safe.left + (isLandscape ? 6 : 8),
+              top: safe.top + 4,
+              child: _BackChip(
+                compact: isLandscape,
+                onTap: _handleBack,
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -682,20 +508,18 @@ class _BackChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final pad = compact ? 7.0 : 9.0;
-    final iconSize = compact ? 18.0 : 22.0;
     return Material(
-      color: Colors.black.withValues(alpha: 0.42),
+      color: Colors.black.withValues(alpha: 0.45),
       shape: const CircleBorder(),
       child: InkWell(
         customBorder: const CircleBorder(),
         onTap: () => onTap(),
         child: Padding(
-          padding: EdgeInsets.all(pad),
+          padding: EdgeInsets.all(compact ? 7.0 : 8.0),
           child: Icon(
             Icons.arrow_back_ios_new_rounded,
             color: Colors.white,
-            size: iconSize,
+            size: compact ? 18.0 : 22.0,
           ),
         ),
       ),
