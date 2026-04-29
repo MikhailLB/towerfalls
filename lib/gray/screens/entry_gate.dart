@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -53,7 +54,28 @@ class _EntryGateState extends State<EntryGate> {
     super.dispose();
   }
 
+  // Hard ceiling for the entire gray bootstrap. If we exceed this the loading
+  // screen still hands over to the arcade flow so the user can play the game
+  // even when AppsFlyer / FCM / the gateway misbehave on the device.
+  static const Duration _kickoffBudget = Duration(seconds: 35);
+
   Future<WidgetBuilder> _kickoff() async {
+    try {
+      return await _runKickoff().timeout(_kickoffBudget);
+    } on TimeoutException {
+      if (kDebugMode) {
+        debugPrint('[EntryGate] kickoff timed out — fallback to arcade');
+      }
+      return (_) => const MainMenuScreen();
+    } catch (err, st) {
+      if (kDebugMode) {
+        debugPrint('[EntryGate] kickoff failed: $err\n$st');
+      }
+      return (_) => const MainMenuScreen();
+    }
+  }
+
+  Future<WidgetBuilder> _runKickoff() async {
     widget.pulse.onTokenRotated = _onTokenRotated;
     try {
       await widget.pulse.bootstrap();
@@ -80,7 +102,7 @@ class _EntryGateState extends State<EntryGate> {
 
     await widget.install.warmup();
     await Future.wait([
-      widget.install.awaitConversion(),
+      widget.install.awaitConversion(timeout: const Duration(seconds: 12)),
       widget.install.awaitDeepLink(),
     ]);
 
