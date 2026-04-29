@@ -5,6 +5,7 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
@@ -14,6 +15,8 @@ import '../services/pulse_dispatch.dart';
 import '../services/runtime_cache.dart';
 import '../services/secure_http.dart';
 import 'network_pause_screen.dart';
+
+enum _MediaSource { gallery, camera }
 
 /// In-app browser used when the gateway returns a destination URL. Keeps the
 /// session sticky to the first landed page and routes external schemes via
@@ -39,6 +42,7 @@ class BrowserShell extends StatefulWidget {
 class _BrowserShellState extends State<BrowserShell>
     with WidgetsBindingObserver {
   late final WebViewController _wv;
+  final ImagePicker _mediaPicker = ImagePicker();
   bool _loading = true;
   StreamSubscription<List<ConnectivityResult>>? _connSub;
   bool _routedOffline = false;
@@ -54,7 +58,7 @@ class _BrowserShellState extends State<BrowserShell>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _applyOrientations();
-    _applyImmersive();
+    _showSystemBars();
 
     _wv = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
@@ -78,21 +82,26 @@ class _BrowserShellState extends State<BrowserShell>
   }
 
   void _applyOrientations() {
-    SystemChrome.setPreferredOrientations(const [
-      DeviceOrientation.portraitUp,
-      DeviceOrientation.portraitDown,
-      DeviceOrientation.landscapeLeft,
-      DeviceOrientation.landscapeRight,
-    ]);
+    // Empty list delegates rotation to the Android activity. The activity is
+    // marked as fullUser: it auto-rotates when the user enables auto-rotate
+    // and lets Android show the native rotate suggestion when the setting is
+    // disabled on devices that support that system feature.
+    SystemChrome.setPreferredOrientations(const []);
   }
 
-  void _applyImmersive() {
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+  void _showSystemBars() {
+    // Keep system bars visible in the WebView. Android's native rotate
+    // suggestion then appears in the navigation area instead of floating over
+    // the web content and blocking controls.
+    SystemChrome.setEnabledSystemUIMode(
+      SystemUiMode.manual,
+      overlays: SystemUiOverlay.values,
+    );
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) _applyImmersive();
+    if (state == AppLifecycleState.resumed) _showSystemBars();
   }
 
   NavigationDelegate _buildDelegate() {
@@ -186,9 +195,28 @@ class _BrowserShellState extends State<BrowserShell>
 
   Future<List<String>> _pickFiles(FileSelectorParams params) async {
     try {
+      final accepts = _normalizedAcceptTypes(params.acceptTypes);
+      final wantsVideo = _acceptsVideo(accepts);
+      final wantsImage = _acceptsImage(accepts);
+
+      // Most mobile upload fields are photo/video inputs. Prefer Android's
+      // system photo picker and camera intents via image_picker: no storage
+      // permissions are added to AndroidManifest, and the app avoids exposing
+      // a broad document manager unless the site explicitly requests files.
+      if (wantsImage || wantsVideo) {
+        final files = await _pickMediaForWebInput(
+          allowMultiple: params.mode == FileSelectorMode.openMultiple,
+          wantsImage: wantsImage,
+          wantsVideo: wantsVideo,
+          captureOnly: params.isCaptureEnabled,
+        );
+        return _toFileUris(files);
+      }
+
       final result = await FilePicker.platform.pickFiles(
         allowMultiple: params.mode == FileSelectorMode.openMultiple,
-        type: FileType.any,
+        type: FileType.custom,
+        allowedExtensions: const ['pdf', 'txt', 'doc', 'docx'],
       );
       if (result == null) return const [];
       return result.files
@@ -198,6 +226,117 @@ class _BrowserShellState extends State<BrowserShell>
     } catch (_) {
       return const [];
     }
+  }
+
+  List<String> _normalizedAcceptTypes(List<String> raw) {
+    return raw
+        .map((v) => v.trim().toLowerCase())
+        .where((v) => v.isNotEmpty)
+        .toList(growable: false);
+  }
+
+  bool _acceptsImage(List<String> accepts) {
+    if (accepts.isEmpty) return true;
+    return accepts.any((v) =>
+        v == '*/*' ||
+        v == 'image/*' ||
+        v.startsWith('image/') ||
+        const {'.jpg', '.jpeg', '.png', '.webp', '.gif'}.contains(v));
+  }
+
+  bool _acceptsVideo(List<String> accepts) {
+    if (accepts.isEmpty) return true;
+    return accepts.any((v) =>
+        v == '*/*' ||
+        v == 'video/*' ||
+        v.startsWith('video/') ||
+        const {'.mp4', '.mov', '.webm', '.m4v'}.contains(v));
+  }
+
+  Future<List<XFile>> _pickMediaForWebInput({
+    required bool allowMultiple,
+    required bool wantsImage,
+    required bool wantsVideo,
+    required bool captureOnly,
+  }) async {
+    if (captureOnly) {
+      final captured = wantsVideo && !wantsImage
+          ? await _mediaPicker.pickVideo(source: ImageSource.camera)
+          : await _mediaPicker.pickImage(source: ImageSource.camera);
+      return captured == null ? const [] : [captured];
+    }
+
+    final source = await _showMediaSourceSheet(
+      allowCamera: !allowMultiple,
+      wantsImage: wantsImage,
+      wantsVideo: wantsVideo,
+    );
+    if (source == null) return const [];
+
+    switch (source) {
+      case _MediaSource.gallery:
+        if (allowMultiple) {
+          if (wantsImage && wantsVideo) return _mediaPicker.pickMultipleMedia();
+          if (wantsImage) return _mediaPicker.pickMultiImage();
+        }
+        final picked = wantsImage && wantsVideo
+            ? await _mediaPicker.pickMedia()
+            : wantsVideo
+                ? await _mediaPicker.pickVideo(source: ImageSource.gallery)
+                : await _mediaPicker.pickImage(source: ImageSource.gallery);
+        return picked == null ? const [] : [picked];
+      case _MediaSource.camera:
+        final captured = wantsVideo && !wantsImage
+            ? await _mediaPicker.pickVideo(source: ImageSource.camera)
+            : await _mediaPicker.pickImage(source: ImageSource.camera);
+        return captured == null ? const [] : [captured];
+    }
+  }
+
+  Future<_MediaSource?> _showMediaSourceSheet({
+    required bool allowCamera,
+    required bool wantsImage,
+    required bool wantsVideo,
+  }) {
+    if (!mounted) return Future.value(null);
+    final captureLabel = wantsVideo && !wantsImage ? 'Record video' : 'Take photo';
+    return showModalBottomSheet<_MediaSource>(
+      context: context,
+      backgroundColor: const Color(0xFF101521),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (allowCamera)
+              ListTile(
+                leading: const Icon(Icons.photo_camera_outlined,
+                    color: Colors.white),
+                title: Text(
+                  captureLabel,
+                  style: const TextStyle(color: Colors.white),
+                ),
+                onTap: () => Navigator.of(ctx).pop(_MediaSource.camera),
+              ),
+            ListTile(
+              leading: const Icon(Icons.photo_library_outlined,
+                  color: Colors.white),
+              title: const Text(
+                'Choose from gallery',
+                style: TextStyle(color: Colors.white),
+              ),
+              onTap: () => Navigator.of(ctx).pop(_MediaSource.gallery),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  List<String> _toFileUris(List<XFile> files) {
+    return files
+        .where((f) => f.path.isNotEmpty)
+        .map((f) => Uri.file(f.path).toString())
+        .toList(growable: false);
   }
 
   Future<void> _maybeRouteOffline() async {
@@ -358,13 +497,7 @@ class _BrowserShellState extends State<BrowserShell>
         body: Stack(
           fit: StackFit.expand,
           children: [
-            Padding(
-              padding: EdgeInsets.only(
-                top: MediaQuery.of(context).orientation ==
-                        Orientation.landscape
-                    ? 0
-                    : MediaQuery.of(context).viewPadding.top,
-              ),
+            SafeArea(
               child: WebViewWidget(controller: _wv),
             ),
             if (_loading)

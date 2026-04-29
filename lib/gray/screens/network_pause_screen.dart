@@ -2,11 +2,12 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../game/constants.dart';
 import '../services/network_radar.dart';
 
-/// Shown whenever the gray flow detects the device went offline. Provides a
-/// retry button that re-checks reachability and routes back via the
-/// supplied [retryBuilder].
+/// Shown whenever the gray flow detects the device went offline. The artwork
+/// already contains the headline / illustration; we render the supplied
+/// "Retry" plate centered below the engraved panel.
 class NetworkPauseScreen extends StatefulWidget {
   final WidgetBuilder retryBuilder;
   final NetworkRadar radar;
@@ -27,7 +28,6 @@ class _NetworkPauseScreenState extends State<NetworkPauseScreen>
   bool _hint = false;
   Timer? _hintTimer;
   late final AnimationController _press;
-  late final Animation<double> _scale;
 
   @override
   void initState() {
@@ -35,9 +35,6 @@ class _NetworkPauseScreenState extends State<NetworkPauseScreen>
     _press = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 130),
-    );
-    _scale = Tween<double>(begin: 1.0, end: 0.94).animate(
-      CurvedAnimation(parent: _press, curve: Curves.easeOut),
     );
   }
 
@@ -77,134 +74,131 @@ class _NetworkPauseScreenState extends State<NetworkPauseScreen>
 
   @override
   Widget build(BuildContext context) {
-    return const _PauseShell().wrap(
-      child: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 32),
-          child: LayoutBuilder(
-            builder: (ctx, _) => Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const Icon(
-                  Icons.cloud_off_rounded,
-                  color: Colors.white70,
-                  size: 88,
-                ),
-                const SizedBox(height: 24),
-                const Text(
-                  'No connection',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 26,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: 1.2,
+    return Scaffold(
+      backgroundColor: const Color(0xFF050912),
+      body: LayoutBuilder(
+        builder: (context, c) {
+          final landscape = c.maxWidth > c.maxHeight;
+          final bgAsset =
+              landscape ? kNoWifiBgLandscape : kNoWifiBgPortrait;
+          final buttonWidth = landscape
+              ? (c.maxWidth * 0.28).clamp(220.0, 420.0)
+              : (c.maxWidth * 0.55).clamp(200.0, 360.0);
+          // The artwork's central panel ends roughly at ~60% height in
+          // portrait and ~80% in landscape — sit the button just below it.
+          final buttonBottom = landscape
+              ? c.maxHeight * 0.04
+              : c.maxHeight * 0.20;
+          return Stack(
+            fit: StackFit.expand,
+            children: [
+              Image.asset(bgAsset, fit: BoxFit.cover),
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: buttonBottom,
+                child: Center(
+                  child: _RetryPlate(
+                    width: buttonWidth.toDouble(),
+                    busy: _busy,
+                    press: _press,
+                    onTap: _retry,
                   ),
                 ),
-                const SizedBox(height: 12),
-                AnimatedOpacity(
-                  opacity: _hint ? 1.0 : 0.6,
-                  duration: const Duration(milliseconds: 250),
-                  child: const Text(
-                    'Please check your internet and try again.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: Colors.white60,
-                      fontSize: 14,
+              ),
+              SafeArea(
+                child: Align(
+                  alignment: landscape
+                      ? Alignment.topCenter
+                      : Alignment.bottomCenter,
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(
+                      horizontal: 24,
+                      vertical: landscape ? 12 : 16,
                     ),
-                  ),
-                ),
-                const SizedBox(height: 32),
-                ScaleTransition(
-                  scale: _scale,
-                  child: SizedBox(
-                    width: double.infinity,
-                    height: 52,
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        gradient: _busy
-                            ? null
-                            : const LinearGradient(
-                                colors: [
-                                  Color(0xFFFFC107),
-                                  Color(0xFFFF8A00),
-                                ],
-                              ),
-                        color: _busy
-                            ? Colors.amber.withValues(alpha: 0.3)
-                            : null,
-                        borderRadius: BorderRadius.circular(16),
-                        boxShadow: _busy
-                            ? const []
-                            : [
-                                BoxShadow(
-                                  color:
-                                      Colors.amber.withValues(alpha: 0.35),
-                                  blurRadius: 18,
-                                  offset: const Offset(0, 6),
-                                ),
-                              ],
-                      ),
-                      child: Material(
-                        color: Colors.transparent,
-                        child: InkWell(
-                          borderRadius: BorderRadius.circular(16),
-                          onTap: _busy ? null : _retry,
-                          child: Center(
-                            child: _busy
-                                ? const SizedBox(
-                                    width: 24,
-                                    height: 24,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2.5,
-                                      valueColor:
-                                          AlwaysStoppedAnimation<Color>(
-                                              Colors.white),
-                                    ),
-                                  )
-                                : const Text(
-                                    'Retry',
-                                    style: TextStyle(
-                                      color: Colors.black,
-                                      fontSize: 18,
-                                      fontWeight: FontWeight.w900,
-                                      letterSpacing: 2,
-                                    ),
-                                  ),
+                    child: AnimatedOpacity(
+                      opacity: _hint ? 1.0 : 0.0,
+                      duration: const Duration(milliseconds: 250),
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.55),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Padding(
+                          padding: EdgeInsets.symmetric(
+                              horizontal: 14, vertical: 8),
+                          child: Text(
+                            'Still no internet — please try again.',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 13,
+                              letterSpacing: 0.5,
+                            ),
                           ),
                         ),
                       ),
                     ),
                   ),
                 ),
-              ],
-            ),
-          ),
-        ),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
 }
 
-class _PauseShell {
-  const _PauseShell();
+class _RetryPlate extends StatelessWidget {
+  final double width;
+  final bool busy;
+  final AnimationController press;
+  final VoidCallback onTap;
 
-  Widget wrap({required Widget child}) {
-    return Scaffold(
-      backgroundColor: const Color(0xFF0A0F1F),
-      body: Stack(
-        fit: StackFit.expand,
-        children: [
-          const DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: RadialGradient(
-                colors: [Color(0xFF14213D), Color(0xFF050912)],
-                radius: 1.1,
-                center: Alignment.center,
-              ),
+  const _RetryPlate({
+    required this.width,
+    required this.busy,
+    required this.press,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: busy ? null : onTap,
+      child: AnimatedBuilder(
+        animation: press,
+        builder: (_, child) {
+          final scale = 1.0 - 0.05 * press.value;
+          return Transform.scale(scale: scale, child: child);
+        },
+        child: SizedBox(
+          width: width,
+          child: AspectRatio(
+            aspectRatio: 3.6,
+            child: Stack(
+              alignment: Alignment.center,
+              fit: StackFit.expand,
+              children: [
+                Image.asset(kNoWifiButton, fit: BoxFit.contain),
+                if (busy)
+                  const Center(
+                    child: SizedBox(
+                      width: 26,
+                      height: 26,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2.5,
+                        valueColor:
+                            AlwaysStoppedAnimation<Color>(Color(0xFF2A150A)),
+                      ),
+                    ),
+                  ),
+              ],
             ),
           ),
-          child,
-        ],
+        ),
       ),
     );
   }
