@@ -126,7 +126,10 @@ class _BrowserShellState extends State<BrowserShell>
         _injectKeyboardScroll();
         _injectSafeAreaPatch();
         _injectMediaAutoplayShim();
-        if (Platform.isIOS) _injectCameraShim();
+        if (Platform.isIOS) {
+          _injectCameraShim();
+          _injectInputZoomGuard();
+        }
       },
       onWebResourceError: (err) {
         if (err.isForMainFrame != true) return;
@@ -316,6 +319,61 @@ class _BrowserShellState extends State<BrowserShell>
     window.visualViewport.addEventListener('scroll', applyKbPadding);
   }
   applyKbPadding();
+})();
+''');
+  }
+
+  // iOS WKWebView automatically zooms the page when the user focuses an
+  // <input>/<textarea> with computed font-size < 16px (especially noticeable in
+  // landscape, where the zoom often hides the keyboard or shifts content).
+  // Two-pronged guard:
+  //  * patch the viewport meta tag with maximum-scale=1.0 so iOS suppresses the
+  //    focus zoom (honored on iOS 10+).
+  //  * raise the form control font-size to 16px so the heuristic does not even
+  //    trigger if some script later overrides the meta tag.
+  void _injectInputZoomGuard() {
+    _wv.runJavaScript(r'''
+(function(){
+  if (window.__tfNoZoom) return;
+  window.__tfNoZoom = true;
+  var STYLE_ID = '__tfNoZoomStyle';
+  function patchViewport(){
+    var meta = document.querySelector('meta[name="viewport"]');
+    if (!meta){
+      meta = document.createElement('meta');
+      meta.setAttribute('name', 'viewport');
+      meta.setAttribute('content',
+        'width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover');
+      (document.head || document.documentElement).appendChild(meta);
+      return;
+    }
+    var c = meta.getAttribute('content') || '';
+    if (!/maximum-scale\s*=/i.test(c)){
+      c = (c ? c + ', ' : '') + 'maximum-scale=1.0';
+    } else {
+      c = c.replace(/maximum-scale\s*=\s*[\d.]+/ig, 'maximum-scale=1.0');
+    }
+    if (!/initial-scale\s*=/i.test(c)){
+      c = (c ? c + ', ' : '') + 'initial-scale=1.0';
+    }
+    meta.setAttribute('content', c);
+  }
+  function patchStyle(){
+    var st = document.getElementById(STYLE_ID);
+    if (st) return;
+    st = document.createElement('style');
+    st.id = STYLE_ID;
+    st.textContent =
+      'input,select,textarea{font-size:16px!important;-webkit-text-size-adjust:100%!important;}';
+    (document.head || document.documentElement).appendChild(st);
+  }
+  patchViewport();
+  patchStyle();
+  var mo = new MutationObserver(function(){
+    patchViewport();
+    patchStyle();
+  });
+  try { mo.observe(document.documentElement, {childList:true, subtree:true}); } catch(_){}
 })();
 ''');
   }
