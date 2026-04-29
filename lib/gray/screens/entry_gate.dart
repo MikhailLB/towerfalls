@@ -213,6 +213,7 @@ class _EntryGateState extends State<EntryGate> {
             pulse: widget.pulse,
             radar: widget.radar,
             destination: url,
+            onPushTokenReady: _sendPushTokenUpdate,
           );
     }
     return (_) => BrowserShell(
@@ -237,11 +238,15 @@ class _EntryGateState extends State<EntryGate> {
   }
 
   void _onTokenRotated(String fresh) async {
+    _sendPushTokenUpdate(fresh);
+  }
+
+  Future<void> _sendPushTokenUpdate(String fresh) async {
     final body = await widget.install.composePayload(
       locale: Platform.localeName.replaceAll('-', '_'),
       pushToken: fresh,
     );
-    widget.gate.dispatch(body);
+    await widget.gate.dispatch(body);
   }
 
   @override

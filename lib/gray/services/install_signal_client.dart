@@ -204,8 +204,21 @@ class InstallSignalClient {
     final id = await deviceIdentifier();
     if (id != null && id.isNotEmpty) {
       payload['af_id'] = id;
+      if ((payload['sub_id_7'] as String? ?? '').isEmpty) {
+        payload['sub_id_7'] = id;
+      }
     } else if ((payload['af_id'] as String? ?? '').isEmpty) {
       payload['af_id'] = '';
+      payload['sub_id_7'] = payload['sub_id_7'] ?? '';
+    }
+
+    if (Platform.isIOS) {
+      try {
+        final idfa = await AppTrackingTransparency.getAdvertisingIdentifier();
+        if (idfa.isNotEmpty && !idfa.startsWith('00000000-')) {
+          payload.putIfAbsent('sub_id_10', () => idfa);
+        }
+      } catch (_) {}
     }
 
     payload['bundle_id'] = RuntimeBrand.packageName;

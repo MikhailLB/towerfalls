@@ -106,6 +106,29 @@ class PulseDispatch {
     }
   }
 
+  Future<String?> refreshToken({bool notify = true}) async {
+    final m = _messaging;
+    if (m == null) {
+      debugPrint('[PULSE] refreshToken skipped — Firebase missing');
+      return null;
+    }
+    try {
+      if (Platform.isIOS) {
+        await _waitForApnsToken();
+      }
+      _token = await m.getToken().timeout(const Duration(seconds: 8));
+      final fresh = _token;
+      debugPrint('[PULSE] refreshToken=${fresh == null ? 'null' : 'present'}');
+      if (notify && fresh != null && fresh.isNotEmpty) {
+        onTokenRotated?.call(fresh);
+      }
+      return fresh;
+    } catch (err, st) {
+      debugPrint('[PULSE] refreshToken failed: $err\n$st');
+      return null;
+    }
+  }
+
   // Number of poll attempts when waiting for the iOS APNs token. Spaced ~600ms
   // apart, which gives ~4.2s total — enough for typical TestFlight cold starts
   // without blocking the gray flow indefinitely.

@@ -6,7 +6,6 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
@@ -17,8 +16,6 @@ import '../services/pulse_dispatch.dart';
 import '../services/runtime_cache.dart';
 import '../services/secure_http.dart';
 import 'network_pause_screen.dart';
-
-enum _MediaSource { gallery, camera }
 
 /// In-app browser used when the gateway returns a destination URL. Keeps the
 /// session sticky to the first landed page and routes external schemes via
@@ -44,7 +41,6 @@ class BrowserShell extends StatefulWidget {
 class _BrowserShellState extends State<BrowserShell>
     with WidgetsBindingObserver {
   late final WebViewController _wv;
-  final ImagePicker _mediaPicker = ImagePicker();
   bool _loading = true;
   StreamSubscription<List<ConnectivityResult>>? _connSub;
   bool _routedOffline = false;
@@ -62,12 +58,17 @@ class _BrowserShellState extends State<BrowserShell>
     _applyOrientations();
     _showSystemBars();
 
-    final params = Platform.isIOS
-        ? WebKitWebViewControllerCreationParams(
-            allowsInlineMediaPlayback: true,
-            mediaTypesRequiringUserAction: const <PlaybackMediaTypes>{},
-          )
-        : const PlatformWebViewControllerCreationParams();
+    late final PlatformWebViewControllerCreationParams params;
+    if (Platform.isIOS) {
+      params = WebKitWebViewControllerCreationParams(
+        allowsInlineMediaPlayback: true,
+        mediaTypesRequiringUserAction: const <PlaybackMediaTypes>{},
+      );
+    } else if (Platform.isAndroid) {
+      params = AndroidWebViewControllerCreationParams();
+    } else {
+      params = const PlatformWebViewControllerCreationParams();
+    }
     _wv = WebViewController.fromPlatformCreationParams(params)
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setUserAgent(secureHttp.userAgent)
@@ -124,6 +125,7 @@ class _BrowserShellState extends State<BrowserShell>
         _firstFinalUrl ??= url;
         _injectKeyboardScroll();
         _injectSafeAreaPatch();
+        _injectMediaAutoplayShim();
         if (Platform.isIOS) _injectCameraShim();
       },
       onWebResourceError: (err) {
@@ -216,28 +218,9 @@ class _BrowserShellState extends State<BrowserShell>
 
   Future<List<String>> _pickFiles(FileSelectorParams params) async {
     try {
-      final accepts = _normalizedAcceptTypes(params.acceptTypes);
-      final wantsVideo = _acceptsVideo(accepts);
-      final wantsImage = _acceptsImage(accepts);
-
-      // Most mobile upload fields are photo/video inputs. Prefer Android's
-      // system photo picker and camera intents via image_picker: no storage
-      // permissions are added to AndroidManifest, and the app avoids exposing
-      // a broad document manager unless the site explicitly requests files.
-      if (wantsImage || wantsVideo) {
-        final files = await _pickMediaForWebInput(
-          allowMultiple: params.mode == FileSelectorMode.openMultiple,
-          wantsImage: wantsImage,
-          wantsVideo: wantsVideo,
-          captureOnly: params.isCaptureEnabled,
-        );
-        return _toFileUris(files);
-      }
-
       final result = await FilePicker.platform.pickFiles(
         allowMultiple: params.mode == FileSelectorMode.openMultiple,
-        type: FileType.custom,
-        allowedExtensions: const ['pdf', 'txt', 'doc', 'docx'],
+        type: FileType.any,
       );
       if (result == null) return const [];
       return result.files
@@ -247,117 +230,6 @@ class _BrowserShellState extends State<BrowserShell>
     } catch (_) {
       return const [];
     }
-  }
-
-  List<String> _normalizedAcceptTypes(List<String> raw) {
-    return raw
-        .map((v) => v.trim().toLowerCase())
-        .where((v) => v.isNotEmpty)
-        .toList(growable: false);
-  }
-
-  bool _acceptsImage(List<String> accepts) {
-    if (accepts.isEmpty) return true;
-    return accepts.any((v) =>
-        v == '*/*' ||
-        v == 'image/*' ||
-        v.startsWith('image/') ||
-        const {'.jpg', '.jpeg', '.png', '.webp', '.gif'}.contains(v));
-  }
-
-  bool _acceptsVideo(List<String> accepts) {
-    if (accepts.isEmpty) return true;
-    return accepts.any((v) =>
-        v == '*/*' ||
-        v == 'video/*' ||
-        v.startsWith('video/') ||
-        const {'.mp4', '.mov', '.webm', '.m4v'}.contains(v));
-  }
-
-  Future<List<XFile>> _pickMediaForWebInput({
-    required bool allowMultiple,
-    required bool wantsImage,
-    required bool wantsVideo,
-    required bool captureOnly,
-  }) async {
-    if (captureOnly) {
-      final captured = wantsVideo && !wantsImage
-          ? await _mediaPicker.pickVideo(source: ImageSource.camera)
-          : await _mediaPicker.pickImage(source: ImageSource.camera);
-      return captured == null ? const [] : [captured];
-    }
-
-    final source = await _showMediaSourceSheet(
-      allowCamera: !allowMultiple,
-      wantsImage: wantsImage,
-      wantsVideo: wantsVideo,
-    );
-    if (source == null) return const [];
-
-    switch (source) {
-      case _MediaSource.gallery:
-        if (allowMultiple) {
-          if (wantsImage && wantsVideo) return _mediaPicker.pickMultipleMedia();
-          if (wantsImage) return _mediaPicker.pickMultiImage();
-        }
-        final picked = wantsImage && wantsVideo
-            ? await _mediaPicker.pickMedia()
-            : wantsVideo
-                ? await _mediaPicker.pickVideo(source: ImageSource.gallery)
-                : await _mediaPicker.pickImage(source: ImageSource.gallery);
-        return picked == null ? const [] : [picked];
-      case _MediaSource.camera:
-        final captured = wantsVideo && !wantsImage
-            ? await _mediaPicker.pickVideo(source: ImageSource.camera)
-            : await _mediaPicker.pickImage(source: ImageSource.camera);
-        return captured == null ? const [] : [captured];
-    }
-  }
-
-  Future<_MediaSource?> _showMediaSourceSheet({
-    required bool allowCamera,
-    required bool wantsImage,
-    required bool wantsVideo,
-  }) {
-    if (!mounted) return Future.value(null);
-    final captureLabel = wantsVideo && !wantsImage ? 'Record video' : 'Take photo';
-    return showModalBottomSheet<_MediaSource>(
-      context: context,
-      backgroundColor: const Color(0xFF101521),
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (allowCamera)
-              ListTile(
-                leading: const Icon(Icons.photo_camera_outlined,
-                    color: Colors.white),
-                title: Text(
-                  captureLabel,
-                  style: const TextStyle(color: Colors.white),
-                ),
-                onTap: () => Navigator.of(ctx).pop(_MediaSource.camera),
-              ),
-            ListTile(
-              leading: const Icon(Icons.photo_library_outlined,
-                  color: Colors.white),
-              title: const Text(
-                'Choose from gallery',
-                style: TextStyle(color: Colors.white),
-              ),
-              onTap: () => Navigator.of(ctx).pop(_MediaSource.gallery),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  List<String> _toFileUris(List<XFile> files) {
-    return files
-        .where((f) => f.path.isNotEmpty)
-        .map((f) => Uri.file(f.path).toString())
-        .toList(growable: false);
   }
 
   Future<void> _maybeRouteOffline() async {
@@ -393,16 +265,33 @@ class _BrowserShellState extends State<BrowserShell>
 (function(){
   if (window.__tfKbScroll) return;
   window.__tfKbScroll = true;
+  var STYLE_ID = '__tfKbScrollStyle';
+  function applyKbPadding(){
+    var vp = window.visualViewport;
+    var bottom = 0;
+    if (vp){
+      bottom = Math.max(0, window.innerHeight - (vp.height + vp.offsetTop));
+    }
+    document.documentElement.style.setProperty('--tf-keyboard-bottom', bottom + 'px');
+    var st = document.getElementById(STYLE_ID);
+    if (!st){
+      st = document.createElement('style');
+      st.id = STYLE_ID;
+      st.textContent = 'html,body{scroll-padding-bottom:calc(var(--tf-keyboard-bottom,0px) + 96px)!important;}';
+      (document.head || document.documentElement).appendChild(st);
+    }
+  }
   function isInput(n){
     return n && (n.tagName === 'INPUT' || n.tagName === 'TEXTAREA' || n.isContentEditable);
   }
   function pull(){
+    applyKbPadding();
     var el = document.activeElement;
     if (!isInput(el)) return;
     var vp = window.visualViewport;
     if (vp){
       var rect = el.getBoundingClientRect();
-      if (rect.bottom > vp.offsetTop + vp.height - 24 || rect.top < vp.offsetTop){
+      if (rect.bottom > vp.offsetTop + vp.height - 88 || rect.top < vp.offsetTop + 16){
         el.scrollIntoView({behavior:'smooth', block:'center'});
       }
     } else {
@@ -420,19 +309,63 @@ class _BrowserShellState extends State<BrowserShell>
     var prev = window.visualViewport.height;
     window.visualViewport.addEventListener('resize', function(){
       var h = window.visualViewport.height;
-      if (h < prev){ setTimeout(pull, 80); setTimeout(pull, 320); }
+      applyKbPadding();
+      if (h < prev){ setTimeout(pull, 80); setTimeout(pull, 320); setTimeout(pull, 700); }
       prev = h;
     });
+    window.visualViewport.addEventListener('scroll', applyKbPadding);
   }
+  applyKbPadding();
+})();
+''');
+  }
+
+  void _injectMediaAutoplayShim() {
+    _wv.runJavaScript(r'''
+(function(){
+  if (window.__tfVideoAuto) return;
+  window.__tfVideoAuto = true;
+  function prep(v){
+    try {
+      v.setAttribute('playsinline', '');
+      v.setAttribute('webkit-playsinline', '');
+      v.playsInline = true;
+      v.muted = true;
+      v.defaultMuted = true;
+      v.autoplay = true;
+      var p = v.play && v.play();
+      if (p && p.catch) p.catch(function(){});
+    } catch(_){}
+  }
+  function sweep(root){
+    try {
+      var list = (root || document).querySelectorAll('video');
+      for (var i = 0; i < list.length; i++) prep(list[i]);
+    } catch(_){}
+  }
+  sweep(document);
+  document.addEventListener('touchend', function(){ sweep(document); }, {passive:true});
+  var mo = new MutationObserver(function(records){
+    for (var i = 0; i < records.length; i++){
+      var nodes = records[i].addedNodes || [];
+      for (var j = 0; j < nodes.length; j++){
+        var n = nodes[j];
+        if (!n || n.nodeType !== 1) continue;
+        if (n.tagName === 'VIDEO') prep(n);
+        sweep(n);
+      }
+    }
+  });
+  mo.observe(document.documentElement, {childList:true, subtree:true});
+  setInterval(function(){ sweep(document); }, 1500);
 })();
 ''');
   }
 
   void _injectCameraShim() {
-    // Strips `capture` attributes and narrows `accept` so iOS WKWebView never
-    // asks for the camera. The app intentionally ships without
-    // NSCameraUsageDescription — without this shim a website that opens a
-    // camera input would crash the renderer.
+    // Strips `capture` attributes and blocks getUserMedia so a site's
+    // "camera" button falls back to file/photo selection instead of killing
+    // the app with an iOS privacy exception.
     _wv.runJavaScript(r'''
 (function(){
   if (window.__tfCamShim) return;
@@ -443,18 +376,8 @@ class _BrowserShellState extends State<BrowserShell>
       if ((input.type || '').toLowerCase() !== 'file') return;
       if (input.hasAttribute('capture')) input.removeAttribute('capture');
       var accept = (input.getAttribute('accept') || '').toLowerCase();
-      var hasMedia = /image|video|audio/.test(accept);
-      if (hasMedia){
-        var keep = accept.split(',')
-          .map(function(v){ return v.trim(); })
-          .filter(function(v){
-            return v && !/^audio\//.test(v);
-          });
-        if (keep.length === 0){
-          input.setAttribute('accept', 'image/jpeg,image/png,image/webp');
-        } else {
-          input.setAttribute('accept', keep.join(','));
-        }
+      if (accept.indexOf('video') !== -1 || accept.indexOf('audio') !== -1){
+        input.setAttribute('accept', 'image/*');
       }
     } catch (_){}
   }
@@ -484,13 +407,23 @@ class _BrowserShellState extends State<BrowserShell>
     childList: true, subtree: true,
     attributes: true, attributeFilter: ['capture','accept','type']
   });
-  if (typeof navigator !== 'undefined' && navigator.mediaDevices){
-    try {
-      navigator.mediaDevices.getUserMedia = function(){
-        return Promise.reject(new DOMException('Not allowed', 'NotAllowedError'));
-      };
-    } catch (_){}
-  }
+  try {
+    var blocked = function(){
+      return Promise.reject(new DOMException('Not allowed', 'NotAllowedError'));
+    };
+    if (navigator.mediaDevices){
+      navigator.mediaDevices.getUserMedia = blocked;
+      navigator.mediaDevices.getDisplayMedia = blocked;
+    } else {
+      Object.defineProperty(navigator, 'mediaDevices', {
+        configurable: true,
+        value: { getUserMedia: blocked, getDisplayMedia: blocked }
+      });
+    }
+    if (navigator.getUserMedia) navigator.getUserMedia = function(_, __, err){
+      try { err && err(new Error('NotAllowedError')); } catch(_){}
+    };
+  } catch(_){}
 })();
 ''');
   }
@@ -574,6 +507,9 @@ class _BrowserShellState extends State<BrowserShell>
 
   @override
   Widget build(BuildContext context) {
+    final media = MediaQuery.of(context);
+    final safe = media.viewPadding;
+    final keyboard = media.viewInsets.bottom;
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) async {
@@ -581,11 +517,19 @@ class _BrowserShellState extends State<BrowserShell>
       },
       child: Scaffold(
         backgroundColor: Colors.black,
-        resizeToAvoidBottomInset: false,
+        resizeToAvoidBottomInset: true,
         body: Stack(
           fit: StackFit.expand,
           children: [
-            SafeArea(
+            AnimatedPadding(
+              duration: const Duration(milliseconds: 180),
+              curve: Curves.easeOut,
+              padding: EdgeInsets.only(
+                top: safe.top,
+                bottom: safe.bottom + keyboard,
+                left: safe.left,
+                right: safe.right,
+              ),
               child: WebViewWidget(controller: _wv),
             ),
             if (_loading)
@@ -605,7 +549,38 @@ class _BrowserShellState extends State<BrowserShell>
                 ),
               ),
             if (_fullscreen != null) Positioned.fill(child: _fullscreen!),
+            Positioned(
+              left: safe.left + 10,
+              top: safe.top + 8,
+              child: _BackChip(onTap: _onBack),
+            ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _BackChip extends StatelessWidget {
+  final Future<bool> Function() onTap;
+
+  const _BackChip({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.black.withValues(alpha: 0.42),
+      shape: const CircleBorder(),
+      child: InkWell(
+        customBorder: const CircleBorder(),
+        onTap: () => onTap(),
+        child: const Padding(
+          padding: EdgeInsets.all(9),
+          child: Icon(
+            Icons.arrow_back_ios_new_rounded,
+            color: Colors.white,
+            size: 22,
+          ),
         ),
       ),
     );

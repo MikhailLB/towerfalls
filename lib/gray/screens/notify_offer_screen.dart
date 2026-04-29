@@ -20,6 +20,7 @@ class NotifyOfferScreen extends StatefulWidget {
   final PulseDispatch pulse;
   final NetworkRadar radar;
   final String destination;
+  final Future<void> Function(String token)? onPushTokenReady;
 
   const NotifyOfferScreen({
     super.key,
@@ -27,6 +28,7 @@ class NotifyOfferScreen extends StatefulWidget {
     required this.pulse,
     required this.radar,
     required this.destination,
+    this.onPushTokenReady,
   });
 
   @override
@@ -122,6 +124,12 @@ class _NotifyOfferScreenState extends State<NotifyOfferScreen>
     setState(() => _busy = true);
     try {
       final granted = await widget.pulse.askConsent();
+      if (granted) {
+        final token = await widget.pulse.refreshToken(notify: false);
+        if (token != null && token.isNotEmpty) {
+          await widget.onPushTokenReady?.call(token);
+        }
+      }
       if (!granted) {
         await _registerCooldown();
       }

@@ -95,5 +95,11 @@
 		<string>tel</string>
 		<string>mailto</string>
 	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>Camera access is used only when a web page asks you to attach a photo.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Microphone access is used only when a web page asks you to attach media with sound.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Photo library access is used to attach images requested by the web page.</string>
 </dict>
 </plist>
