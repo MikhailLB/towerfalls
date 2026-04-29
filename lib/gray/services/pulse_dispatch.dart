@@ -72,9 +72,11 @@ class PulseDispatch {
       }
 
       try {
-        _token = await _messaging!.getToken();
+        _token = await _messaging!
+            .getToken()
+            .timeout(const Duration(seconds: 3));
       } catch (err) {
-        if (kDebugMode) debugPrint('[PULSE] getToken failed: $err');
+        debugPrint('[PULSE] getToken failed: $err');
       }
 
       _messaging!.onTokenRefresh.listen((fresh) {
@@ -85,7 +87,9 @@ class PulseDispatch {
       FirebaseMessaging.onMessage.listen(_onForeground);
       FirebaseMessaging.onMessageOpenedApp.listen(_onTapInBackground);
 
-      final cold = await _messaging!.getInitialMessage();
+      final cold = await _messaging!
+          .getInitialMessage()
+          .timeout(const Duration(seconds: 3), onTimeout: () => null);
       if (cold != null) _onColdStart(cold);
 
       _ready = true;

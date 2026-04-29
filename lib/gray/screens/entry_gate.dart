@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../screens/loading_screen.dart';
@@ -82,10 +81,13 @@ class _EntryGateState extends State<EntryGate> {
     widget.pulse.onTokenRotated = _onTokenRotated;
     final swPulse = Stopwatch()..start();
     try {
-      await widget.pulse.bootstrap();
+      await widget.pulse.bootstrap().timeout(const Duration(seconds: 8));
       debugPrint(
           '[TF.GRAY] pulse.bootstrap done in ${swPulse.elapsedMilliseconds}ms,'
           ' fcm=${widget.pulse.token == null ? 'null' : 'present'}');
+    } on TimeoutException {
+      debugPrint(
+          '[TF.GRAY] pulse.bootstrap TIMEOUT after ${swPulse.elapsedMilliseconds}ms — continue without FCM token');
     } catch (err) {
       debugPrint('[TF.GRAY] pulse.bootstrap failed: $err');
     }
@@ -96,8 +98,9 @@ class _EntryGateState extends State<EntryGate> {
       case LaunchRoute.web:
         return _runReturningWebFlow();
       case LaunchRoute.arcade:
-        debugPrint('[TF.GRAY] route=arcade → MainMenuScreen');
-        return (_) => const MainMenuScreen();
+        debugPrint(
+            '[TF.GRAY] route=arcade, but gray is enabled → re-check config');
+        return _runFirstLaunchFlow();
       case LaunchRoute.pristine:
         return _runFirstLaunchFlow();
     }
