@@ -18,15 +18,15 @@ class RemoteGateClient {
 
   Future<GateResponse> dispatch(Map<String, dynamic> body) async {
     final endpoint = RuntimeBrand.configUrl;
+    debugPrint('[TF.RGC] dispatch → endpoint="$endpoint"');
     if (endpoint.isEmpty) {
-      if (kDebugMode) {
-        debugPrint('[RGC] gateway endpoint missing — declined');
-      }
+      debugPrint('[TF.RGC] gateway endpoint missing — declined');
       return GateResponse.declined('endpoint_missing');
     }
 
     try {
       final uri = Uri.parse(endpoint);
+      debugPrint('[TF.RGC] POST $uri body=${jsonEncode(body)}');
       final response = await secureHttp
           .post(
             uri,
@@ -35,13 +35,12 @@ class RemoteGateClient {
           )
           .timeout(const Duration(seconds: 18));
 
-      if (kDebugMode) {
-        debugPrint('[RGC] status=${response.statusCode}');
-        final preview = response.body.length > 600
-            ? '${response.body.substring(0, 600)}…'
-            : response.body;
-        debugPrint('[RGC] body=$preview');
-      }
+      debugPrint('[TF.RGC] HTTP ${response.statusCode}'
+          ' contentLen=${response.contentLength ?? response.body.length}');
+      final preview = response.body.length > 800
+          ? '${response.body.substring(0, 800)}…'
+          : response.body;
+      debugPrint('[TF.RGC] body=$preview');
 
       if (response.statusCode != 200) {
         return GateResponse.declined('http_${response.statusCode}');
@@ -49,10 +48,15 @@ class RemoteGateClient {
 
       final decoded = jsonDecode(response.body);
       if (decoded is! Map<String, dynamic>) {
+        debugPrint('[TF.RGC] body is not a JSON object — declined');
         return GateResponse.declined('bad_json');
       }
 
       final reply = GateResponse.fromMap(decoded);
+      debugPrint('[TF.RGC] parsed reply granted=${reply.granted}'
+          ' dest=${reply.destination ?? 'null'}'
+          ' note=${reply.note ?? '-'}'
+          ' expires=${reply.expiresAtEpoch ?? '-'}');
       if (reply.granted && reply.destination != null) {
         await _cache.writeCachedTarget(reply.destination!);
         final ttl = reply.expiresAtEpoch;
@@ -62,10 +66,7 @@ class RemoteGateClient {
       }
       return reply;
     } catch (err, st) {
-      if (kDebugMode) {
-        debugPrint('[RGC] dispatch error: $err');
-        debugPrint('$st');
-      }
+      debugPrint('[TF.RGC] dispatch error: $err\n$st');
       return GateResponse.declined(err.toString());
     }
   }

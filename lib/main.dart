@@ -57,13 +57,21 @@ Future<void> main() async {
   try {
     await cache.bootstrap();
   } catch (err) {
-    if (kDebugMode) debugPrint('[BOOT] RuntimeCache failed: $err');
+    debugPrint('[TF.GRAY] RuntimeCache failed: $err');
   }
 
   final radar = NetworkRadar();
   final install = InstallSignalClient();
   final gate = RemoteGateClient(cache);
   final pulse = PulseDispatch(cache);
+
+  debugPrint('[TF.GRAY] runtime brand:'
+      ' gateEnabled=${RuntimeBrand.gateEnabled}'
+      ' configUrl="${RuntimeBrand.configUrl}"'
+      ' devKeyLen=${RuntimeBrand.installDevKey.length}'
+      ' fbProj=${RuntimeBrand.firebaseProjectNumber}'
+      ' iosAppId=${RuntimeBrand.iosAppId}'
+      ' bundle=${RuntimeBrand.packageName}');
 
   runApp(TowerFallsApp(
     cache: cache,

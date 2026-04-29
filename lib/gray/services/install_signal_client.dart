@@ -31,17 +31,24 @@ class InstallSignalClient {
       await Future.delayed(const Duration(milliseconds: 700));
       final status =
           await AppTrackingTransparency.trackingAuthorizationStatus;
+      debugPrint('[TF.ISC] ATT status before prompt=$status');
       if (status == TrackingStatus.notDetermined) {
-        await AppTrackingTransparency.requestTrackingAuthorization();
+        final after =
+            await AppTrackingTransparency.requestTrackingAuthorization();
+        debugPrint('[TF.ISC] ATT status after prompt=$after');
       }
     } catch (err) {
-      if (kDebugMode) debugPrint('[ISC] ATT skipped: $err');
+      debugPrint('[TF.ISC] ATT skipped: $err');
     }
   }
 
   Future<void> warmup() async {
-    if (_started) return;
+    if (_started) {
+      debugPrint('[TF.ISC] warmup already started — skip');
+      return;
+    }
     final devKey = RuntimeBrand.installDevKey;
+    debugPrint('[TF.ISC] warmup begin, devKeyLen=${devKey.length}');
     if (devKey.isEmpty) {
       _started = true;
       if (!_conversionGate.isCompleted) {
@@ -50,21 +57,20 @@ class InstallSignalClient {
       if (!_deepLinkGate.isCompleted) {
         _deepLinkGate.complete();
       }
-      if (kDebugMode) {
-        debugPrint('[ISC] dev key empty — skipping AppsFlyer init');
-      }
+      debugPrint('[TF.ISC] dev key empty — skipping AppsFlyer init');
       return;
     }
 
     _started = true;
     try {
       if (Platform.isIOS) {
+        debugPrint('[TF.ISC] iOS → ATT prompt');
         await _requestAttPrompt();
       }
       final opts = AppsFlyerOptions(
         afDevKey: devKey,
         appId: RuntimeBrand.iosAppId,
-        showDebug: false,
+        showDebug: kDebugMode,
         timeToWaitForATTUserAuthorization: 10,
       );
       _sdk = AppsflyerSdk(opts);
@@ -73,16 +79,15 @@ class InstallSignalClient {
       _sdk!.onAppOpenAttribution(_handleReopen);
       _sdk!.onDeepLinking(_handleDeepLink);
 
+      debugPrint('[TF.ISC] AppsflyerSdk.initSdk()');
       await _sdk!.initSdk(
         registerConversionDataCallback: true,
         registerOnAppOpenAttributionCallback: true,
         registerOnDeepLinkingCallback: true,
       );
+      debugPrint('[TF.ISC] initSdk OK');
     } catch (err, st) {
-      if (kDebugMode) {
-        debugPrint('[ISC] warmup error: $err');
-        debugPrint('$st');
-      }
+      debugPrint('[TF.ISC] warmup error: $err\n$st');
       if (!_conversionGate.isCompleted) {
         _conversionGate.complete(<String, dynamic>{});
       }
@@ -103,9 +108,7 @@ class InstallSignalClient {
 
   void _handleConversion(dynamic raw) async {
     final data = _flatten(raw);
-    if (kDebugMode) {
-      debugPrint('[ISC] conversion ${jsonEncode(data)}');
-    }
+    debugPrint('[TF.ISC] conversion ${jsonEncode(data)}');
 
     if (data['af_status'] == 'Organic') {
       await Future.delayed(
@@ -163,8 +166,11 @@ class InstallSignalClient {
   Future<Map<String, dynamic>> awaitConversion({
     Duration timeout = const Duration(seconds: 25),
   }) {
-    return _conversionGate.future
-        .timeout(timeout, onTimeout: () => <String, dynamic>{});
+    return _conversionGate.future.timeout(timeout, onTimeout: () {
+      debugPrint(
+          '[TF.ISC] awaitConversion TIMEOUT after ${timeout.inSeconds}s');
+      return <String, dynamic>{};
+    });
   }
 
   Future<void> awaitDeepLink({
@@ -213,9 +219,7 @@ class InstallSignalClient {
       payload['firebase_project_id'] = RuntimeBrand.firebaseProjectNumber;
     }
 
-    if (kDebugMode) {
-      debugPrint('[ISC] payload ${jsonEncode(payload)}');
-    }
+    debugPrint('[TF.ISC] payload ${jsonEncode(payload)}');
     return payload;
   }
 }

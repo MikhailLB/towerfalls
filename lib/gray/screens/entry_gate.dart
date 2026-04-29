@@ -60,34 +60,43 @@ class _EntryGateState extends State<EntryGate> {
   static const Duration _kickoffBudget = Duration(seconds: 35);
 
   Future<WidgetBuilder> _kickoff() async {
+    final swMain = Stopwatch()..start();
+    debugPrint('[TF.GRAY] kickoff: enter (budget=${_kickoffBudget.inSeconds}s)');
     try {
-      return await _runKickoff().timeout(_kickoffBudget);
+      final builder = await _runKickoff().timeout(_kickoffBudget);
+      debugPrint(
+          '[TF.GRAY] kickoff: done in ${swMain.elapsedMilliseconds}ms');
+      return builder;
     } on TimeoutException {
-      if (kDebugMode) {
-        debugPrint('[EntryGate] kickoff timed out — fallback to arcade');
-      }
+      debugPrint(
+          '[TF.GRAY] kickoff: TIMEOUT after ${swMain.elapsedMilliseconds}ms — fallback to arcade');
       return (_) => const MainMenuScreen();
     } catch (err, st) {
-      if (kDebugMode) {
-        debugPrint('[EntryGate] kickoff failed: $err\n$st');
-      }
+      debugPrint(
+          '[TF.GRAY] kickoff: ERROR after ${swMain.elapsedMilliseconds}ms: $err\n$st');
       return (_) => const MainMenuScreen();
     }
   }
 
   Future<WidgetBuilder> _runKickoff() async {
     widget.pulse.onTokenRotated = _onTokenRotated;
+    final swPulse = Stopwatch()..start();
     try {
       await widget.pulse.bootstrap();
+      debugPrint(
+          '[TF.GRAY] pulse.bootstrap done in ${swPulse.elapsedMilliseconds}ms,'
+          ' fcm=${widget.pulse.token == null ? 'null' : 'present'}');
     } catch (err) {
-      if (kDebugMode) debugPrint('[EntryGate] pulse bootstrap failed: $err');
+      debugPrint('[TF.GRAY] pulse.bootstrap failed: $err');
     }
 
     final route = widget.cache.readRoute();
+    debugPrint('[TF.GRAY] cached route=$route');
     switch (route) {
       case LaunchRoute.web:
         return _runReturningWebFlow();
       case LaunchRoute.arcade:
+        debugPrint('[TF.GRAY] route=arcade → MainMenuScreen');
         return (_) => const MainMenuScreen();
       case LaunchRoute.pristine:
         return _runFirstLaunchFlow();
@@ -95,62 +104,102 @@ class _EntryGateState extends State<EntryGate> {
   }
 
   Future<WidgetBuilder> _runFirstLaunchFlow() async {
+    debugPrint('[TF.GRAY] flow=first-launch');
     final online = await widget.radar.isReachable();
+    debugPrint('[TF.GRAY] network reachable=$online');
     if (!online) {
+      debugPrint('[TF.GRAY] offline → NetworkPauseScreen');
       return _offlineBuilder(returnAsFirstLaunch: true);
     }
 
+    final swWarm = Stopwatch()..start();
     await widget.install.warmup();
+    debugPrint(
+        '[TF.GRAY] install.warmup done in ${swWarm.elapsedMilliseconds}ms');
+
+    final swConv = Stopwatch()..start();
     await Future.wait([
       widget.install.awaitConversion(timeout: const Duration(seconds: 12)),
       widget.install.awaitDeepLink(),
     ]);
+    debugPrint(
+        '[TF.GRAY] awaitConversion+awaitDeepLink done in ${swConv.elapsedMilliseconds}ms');
 
     final body = await widget.install.composePayload(
       locale: Platform.localeName.replaceAll('-', '_'),
       pushToken: widget.pulse.token,
     );
+    debugPrint('[TF.GRAY] payload keys=${body.keys.toList()}');
+
+    final swDispatch = Stopwatch()..start();
     final reply = await widget.gate.dispatch(body);
+    debugPrint(
+        '[TF.GRAY] gate.dispatch done in ${swDispatch.elapsedMilliseconds}ms'
+        ' granted=${reply.granted} dest=${reply.destination ?? 'null'}'
+        ' note=${reply.note ?? '-'}');
 
     if (reply.granted && reply.destination != null) {
       await widget.cache.writeRoute(LaunchRoute.web);
+      debugPrint('[TF.GRAY] decision=WEB → BrowserShell @ ${reply.destination}');
       return _webBuilder(reply.destination!);
     }
     await widget.cache.writeRoute(LaunchRoute.arcade);
+    debugPrint('[TF.GRAY] decision=ARCADE → MainMenuScreen');
     return (_) => const MainMenuScreen();
   }
 
   Future<WidgetBuilder> _runReturningWebFlow() async {
+    debugPrint('[TF.GRAY] flow=returning-web');
     final online = await widget.radar.isReachable();
+    debugPrint('[TF.GRAY] network reachable=$online');
     if (!online) {
+      debugPrint('[TF.GRAY] offline → NetworkPauseScreen');
       return _offlineBuilder(returnAsFirstLaunch: false);
     }
 
     final oneShot = await widget.cache.consumeOneShotPush();
     if (oneShot != null) {
+      debugPrint('[TF.GRAY] one-shot push pending → BrowserShell @ $oneShot');
       return _webBuilder(oneShot);
     }
 
     final cached = await widget.cache.readCachedTarget();
+    debugPrint('[TF.GRAY] cached target=${cached ?? 'null'}');
 
+    final swWarm = Stopwatch()..start();
     await widget.install.warmup();
+    debugPrint(
+        '[TF.GRAY] install.warmup done in ${swWarm.elapsedMilliseconds}ms');
+
+    final swConv = Stopwatch()..start();
     await Future.wait([
       widget.install.awaitConversion(timeout: const Duration(seconds: 9)),
       widget.install.awaitDeepLink(),
     ]);
+    debugPrint(
+        '[TF.GRAY] awaitConversion+awaitDeepLink done in ${swConv.elapsedMilliseconds}ms');
 
     final body = await widget.install.composePayload(
       locale: Platform.localeName.replaceAll('-', '_'),
       pushToken: widget.pulse.token,
     );
+
+    final swDispatch = Stopwatch()..start();
     final reply = await widget.gate.dispatch(body);
+    debugPrint(
+        '[TF.GRAY] gate.dispatch done in ${swDispatch.elapsedMilliseconds}ms'
+        ' granted=${reply.granted} dest=${reply.destination ?? 'null'}'
+        ' note=${reply.note ?? '-'}');
 
     if (reply.granted && reply.destination != null) {
+      debugPrint('[TF.GRAY] decision=WEB → BrowserShell @ ${reply.destination}');
       return _webBuilder(reply.destination!);
     }
     if (cached != null) {
+      debugPrint('[TF.GRAY] decision=CACHED-WEB → BrowserShell @ $cached');
       return _webBuilder(cached);
     }
+    debugPrint('[TF.GRAY] decision=NO-DEST → NetworkPauseScreen');
     return _offlineBuilder(returnAsFirstLaunch: false);
   }
 
