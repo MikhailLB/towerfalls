@@ -129,10 +129,12 @@ class _BrowserShellState extends State<BrowserShell>
 
   NavigationDelegate _buildDelegate() {
     return NavigationDelegate(
-      onPageStarted: (_) {
+      onPageStarted: (url) {
+        debugPrint('[TF.WV] onPageStarted url=$url');
         if (mounted) setState(() => _loading = true);
       },
       onPageFinished: (url) {
+        debugPrint('[TF.WV] onPageFinished url=$url');
         if (mounted) setState(() => _loading = false);
         _redirectRetries = 0;
         _firstFinalUrl ??= url;
@@ -147,18 +149,34 @@ class _BrowserShellState extends State<BrowserShell>
       onWebResourceError: (err) {
         if (err.isForMainFrame != true) return;
         final desc = err.description.toLowerCase();
+        debugPrint(
+          '[TF.WV] resource error code=${err.errorCode} type=${err.errorType} '
+          'mainFrame=${err.isForMainFrame} desc=$desc',
+        );
         final loop = desc.contains('too_many_redirects') ||
             desc.contains('too many redirects') ||
             err.errorCode == -1007 ||
             err.errorCode == -9;
         if (loop && _lastMainFrame != null && _redirectRetries < 3) {
           _redirectRetries++;
-          _wv.loadRequest(Uri.parse(_lastMainFrame!));
+          // Bouncing the same URL into a redirect loop never resolves itself —
+          // strip query params and try once, then fall back to the original
+          // destination (config URL) so the user is never stuck on a blank
+          // page after a malformed push payload.
+          final next = _redirectRetries < 2
+              ? _lastMainFrame!
+              : widget.destination;
+          debugPrint('[TF.WV] redirect loop retry #$_redirectRetries → $next');
+          _wv.loadRequest(Uri.parse(next));
           return;
         }
         _maybeRouteOffline();
       },
-      onHttpError: (_) {},
+      onHttpError: (err) {
+        debugPrint(
+          '[TF.WV] http error status=${err.response?.statusCode}',
+        );
+      },
       onNavigationRequest: (req) {
         final uri = Uri.tryParse(req.url);
         if (uri == null) return NavigationDecision.prevent;
@@ -169,9 +187,13 @@ class _BrowserShellState extends State<BrowserShell>
             scheme == 'data' ||
             scheme == 'blob';
         if (inApp) {
-          if (req.isMainFrame) _lastMainFrame = req.url;
+          if (req.isMainFrame) {
+            _lastMainFrame = req.url;
+            debugPrint('[TF.WV] navigate mainFrame=$scheme url=${req.url}');
+          }
           return NavigationDecision.navigate;
         }
+        debugPrint('[TF.WV] external scheme=$scheme url=${req.url}');
         _launchExternal(uri);
         return NavigationDecision.prevent;
       },
