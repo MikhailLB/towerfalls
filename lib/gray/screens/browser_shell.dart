@@ -493,23 +493,24 @@ class _BrowserShellState extends State<BrowserShell>
       _hideFullscreen?.call();
       return false;
     }
-    if (await _wv.canGoBack()) {
-      final current = await _wv.currentUrl();
-      if (current != null &&
-          _firstFinalUrl != null &&
-          current == _firstFinalUrl) {
-        return false;
+    try {
+      if (await _wv.canGoBack()) {
+        final current = await _wv.currentUrl();
+        if (current != null &&
+            _firstFinalUrl != null &&
+            current == _firstFinalUrl) {
+          return false;
+        }
+        await _wv.goBack();
       }
-      await _wv.goBack();
+    } catch (err) {
+      debugPrint('[TF.WV] back navigation failed: $err');
     }
     return false;
   }
 
   @override
   Widget build(BuildContext context) {
-    final media = MediaQuery.of(context);
-    final safe = media.viewPadding;
-    final keyboard = media.viewInsets.bottom;
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) async {
@@ -517,44 +518,63 @@ class _BrowserShellState extends State<BrowserShell>
       },
       child: Scaffold(
         backgroundColor: Colors.black,
-        resizeToAvoidBottomInset: true,
-        body: Stack(
-          fit: StackFit.expand,
-          children: [
-            AnimatedPadding(
-              duration: const Duration(milliseconds: 180),
-              curve: Curves.easeOut,
-              padding: EdgeInsets.only(
-                top: safe.top,
-                bottom: safe.bottom + keyboard,
-                left: safe.left,
-                right: safe.right,
-              ),
-              child: WebViewWidget(controller: _wv),
-            ),
-            if (_loading)
-              const ColoredBox(
-                color: Colors.black,
-                child: Center(
-                  child: SizedBox(
-                    width: 36,
-                    height: 36,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 3.0,
-                      valueColor: AlwaysStoppedAnimation<Color>(
-                        Color(0xFFFFC107),
+        resizeToAvoidBottomInset: false,
+        // OrientationBuilder forces a rebuild on every rotation so the
+        // computed safe-area / chip bar are recalculated for the new
+        // orientation instead of reusing the portrait values.
+        body: OrientationBuilder(
+          builder: (context, orientation) {
+            final media = MediaQuery.of(context);
+            // viewPadding (not viewInsets.bottom) keeps safe-area insets
+            // stable even when the soft keyboard is open. WKWebView resizes
+            // its content itself.
+            final safe = media.viewPadding;
+            final isLandscape = orientation == Orientation.landscape;
+            // Reserve a small bar at the top for the floating back chip so it
+            // never overlaps the web content. In landscape we make it a touch
+            // shorter because vertical space is precious.
+            final chipBar = isLandscape ? 36.0 : 42.0;
+            final topPadding = safe.top + chipBar;
+            return Stack(
+              fit: StackFit.expand,
+              children: [
+                Padding(
+                  padding: EdgeInsets.only(
+                    top: topPadding,
+                    bottom: safe.bottom,
+                    left: safe.left,
+                    right: safe.right,
+                  ),
+                  child: WebViewWidget(controller: _wv),
+                ),
+                if (_loading)
+                  const ColoredBox(
+                    color: Colors.black,
+                    child: Center(
+                      child: SizedBox(
+                        width: 36,
+                        height: 36,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 3.0,
+                          valueColor: AlwaysStoppedAnimation<Color>(
+                            Color(0xFFFFC107),
+                          ),
+                        ),
                       ),
                     ),
                   ),
+                if (_fullscreen != null) Positioned.fill(child: _fullscreen!),
+                Positioned(
+                  left: safe.left + (isLandscape ? 6 : 10),
+                  top: safe.top + (isLandscape ? 2 : 4),
+                  child: _BackChip(
+                    compact: isLandscape,
+                    onTap: _onBack,
+                  ),
                 ),
-              ),
-            if (_fullscreen != null) Positioned.fill(child: _fullscreen!),
-            Positioned(
-              left: safe.left + 10,
-              top: safe.top + 8,
-              child: _BackChip(onTap: _onBack),
-            ),
-          ],
+              ],
+            );
+          },
         ),
       ),
     );
@@ -563,23 +583,26 @@ class _BrowserShellState extends State<BrowserShell>
 
 class _BackChip extends StatelessWidget {
   final Future<bool> Function() onTap;
+  final bool compact;
 
-  const _BackChip({required this.onTap});
+  const _BackChip({required this.onTap, this.compact = false});
 
   @override
   Widget build(BuildContext context) {
+    final pad = compact ? 7.0 : 9.0;
+    final iconSize = compact ? 18.0 : 22.0;
     return Material(
       color: Colors.black.withValues(alpha: 0.42),
       shape: const CircleBorder(),
       child: InkWell(
         customBorder: const CircleBorder(),
         onTap: () => onTap(),
-        child: const Padding(
-          padding: EdgeInsets.all(9),
+        child: Padding(
+          padding: EdgeInsets.all(pad),
           child: Icon(
             Icons.arrow_back_ios_new_rounded,
             color: Colors.white,
-            size: 22,
+            size: iconSize,
           ),
         ),
       ),
