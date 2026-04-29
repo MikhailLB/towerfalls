@@ -207,7 +207,7 @@ class PulseDispatch {
           final decoded = jsonDecode(payload);
           if (decoded is Map && decoded['url'] is String) {
             final url = decoded['url'] as String;
-            if (url.isNotEmpty) onPushDestination?.call(url);
+            if (url.isNotEmpty) _dispatchUrl(url, source: 'tray');
           }
         } catch (_) {}
       },
@@ -354,6 +354,7 @@ class PulseDispatch {
 
   void _onColdStart(RemoteMessage message) {
     final url = message.data['url'] as String?;
+    debugPrint('[PULSE] cold-start tap url=${url ?? 'null'}');
     if (url != null && url.isNotEmpty) {
       _cache.stashOneShotPush(url);
     }
@@ -361,9 +362,26 @@ class PulseDispatch {
 
   void _onTapInBackground(RemoteMessage message) {
     final url = message.data['url'] as String?;
+    debugPrint('[PULSE] background tap url=${url ?? 'null'}');
     if (url != null && url.isNotEmpty) {
-      onPushDestination?.call(url);
+      _dispatchUrl(url, source: 'bg-tap');
     }
+  }
+
+  // Routes a push-supplied URL to the live WebView when the BrowserShell is
+  // mounted, otherwise stashes it so EntryGate can consume it on next entry.
+  // Without the stash fallback, push URLs were silently dropped whenever the
+  // user tapped a notification while the app was anywhere outside the browser
+  // (loading screen, main menu, or the white arcade flow).
+  void _dispatchUrl(String url, {required String source}) {
+    final cb = onPushDestination;
+    if (cb != null) {
+      debugPrint('[PULSE] dispatch url ($source) → live WebView');
+      cb(url);
+      return;
+    }
+    debugPrint('[PULSE] dispatch url ($source) → stash for next entry');
+    _cache.stashOneShotPush(url);
   }
 
   Future<Uint8List?> _downloadImage(String url) async {
