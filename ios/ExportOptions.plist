@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Target: App Store submission. -->
+	<key>method</key>
+	<string>app-store-connect</string>
+
+	<!-- Destination: either "export" (produce .ipa locally) or "upload" (push to ASC). -->
+	<key>destination</key>
+	<string>export</string>
+
+	<!-- App Store Connect record lookup. -->
+	<key>bundleIdentifier</key>
+	<string>com.tstudiomgames.towerfalls</string>
+	<key>appStoreConnectAppID</key>
+	<string>6763527518</string>
+
+	<!-- Signing: switch to manual + your Team ID for CI.
+	     For local interactive builds "automatic" is enough. -->
+	<key>signingStyle</key>
+	<string>automatic</string>
+	<!--
+	<key>teamID</key>
+	<string>YOUR_TEAM_ID</string>
+	-->
+
+	<!-- Xcode 14+ can strip Swift / bitcode symbols automatically. -->
+	<key>stripSwiftSymbols</key>
+	<true/>
+	<key>uploadSymbols</key>
+	<true/>
+	<key>compileBitcode</key>
+	<false/>
+
+	<!-- Generate manifest is not needed for App Store builds. -->
+	<key>generateAppStoreInformation</key>
+	<false/>
+</dict>
+</plist>

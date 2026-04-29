@@ -41,6 +41,7 @@ class _LoadingScreenState extends State<LoadingScreen>
     super.initState();
     SystemChrome.setPreferredOrientations([
       DeviceOrientation.portraitUp,
+      DeviceOrientation.portraitDown,
       DeviceOrientation.landscapeLeft,
       DeviceOrientation.landscapeRight,
     ]);
@@ -137,6 +138,10 @@ class _LoadingScreenState extends State<LoadingScreen>
   Future<void> _goNext() async {
     if (_navigated) return;
     _navigated = true;
+    await SystemChrome.setPreferredOrientations([
+      DeviceOrientation.portraitUp,
+      DeviceOrientation.portraitDown,
+    ]);
     if (!mounted) return;
     final builder = _resolvedBuilder ?? (_) => const MainMenuScreen();
     Navigator.of(context).pushReplacement(
