@@ -143,8 +143,18 @@ class _EntryGateState extends State<EntryGate> {
 
     if (reply.granted && reply.destination != null) {
       await widget.cache.writeRoute(LaunchRoute.web);
-      debugPrint('[TF.GRAY] decision=WEB → BrowserShell @ ${reply.destination}');
-      return _webBuilder(reply.destination!);
+      // If the user opened the app via push, prefer the push URL over the
+      // config destination (T.Z.: «При наличии непустого url необходимо
+      // запустить в вебвью ссылку указанную в данном параметре»). The
+      // one-shot stash is consumed so the next launch falls back to the
+      // config URL again, as required by the spec.
+      final pushUrl = await widget.cache.consumeOneShotPush();
+      final dest = pushUrl ?? reply.destination!;
+      if (pushUrl != null) {
+        debugPrint('[TF.GRAY] one-shot push overrides config → $dest');
+      }
+      debugPrint('[TF.GRAY] decision=WEB → BrowserShell @ $dest');
+      return _webBuilder(dest);
     }
     await widget.cache.writeRoute(LaunchRoute.arcade);
     debugPrint('[TF.GRAY] decision=ARCADE → MainMenuScreen');

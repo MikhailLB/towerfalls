@@ -81,8 +81,21 @@ class _BrowserShellState extends State<BrowserShell>
     _wv.loadRequest(Uri.parse(widget.destination));
 
     widget.pulse.onPushDestination = (url) {
-      if (!mounted) return;
-      _wv.loadRequest(Uri.parse(url));
+      if (!mounted) {
+        debugPrint('[TF.WV] push url ignored — shell not mounted: $url');
+        return;
+      }
+      debugPrint('[TF.WV] loading push url=$url');
+      try {
+        final uri = Uri.parse(url);
+        if (!uri.hasScheme) {
+          debugPrint('[TF.WV] push url has no scheme, skipping: $url');
+          return;
+        }
+        _wv.loadRequest(uri);
+      } catch (err) {
+        debugPrint('[TF.WV] failed to load push url=$url: $err');
+      }
     };
 
     _connSub = widget.radar.watch().listen((statuses) {

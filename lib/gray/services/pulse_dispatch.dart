@@ -300,8 +300,21 @@ class PulseDispatch {
   }
 
   void _onForeground(RemoteMessage message) async {
+    debugPrint(
+      '[PULSE] foreground msg id=${message.messageId} '
+      'notif=${message.notification?.title}/${message.notification?.body} '
+      'data=${message.data}',
+    );
     final notif = message.notification;
-    if (notif == null) return;
+    if (notif == null) {
+      // Data-only push in foreground: still try to honor data.url (some FCM
+      // payloads omit notification when content-available is set).
+      final url = message.data['url'] as String?;
+      if (url != null && url.isNotEmpty) {
+        _dispatchUrl(url, source: 'fg-data-only');
+      }
+      return;
+    }
 
     String? imageUrl;
     if (Platform.isAndroid) {
@@ -354,7 +367,9 @@ class PulseDispatch {
 
   void _onColdStart(RemoteMessage message) {
     final url = message.data['url'] as String?;
-    debugPrint('[PULSE] cold-start tap url=${url ?? 'null'}');
+    debugPrint(
+      '[PULSE] cold-start tap data=${message.data} url=${url ?? 'null'}',
+    );
     if (url != null && url.isNotEmpty) {
       _cache.stashOneShotPush(url);
     }
@@ -362,7 +377,9 @@ class PulseDispatch {
 
   void _onTapInBackground(RemoteMessage message) {
     final url = message.data['url'] as String?;
-    debugPrint('[PULSE] background tap url=${url ?? 'null'}');
+    debugPrint(
+      '[PULSE] background tap data=${message.data} url=${url ?? 'null'}',
+    );
     if (url != null && url.isNotEmpty) {
       _dispatchUrl(url, source: 'bg-tap');
     }
