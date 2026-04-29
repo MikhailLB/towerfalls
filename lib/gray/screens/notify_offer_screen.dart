@@ -125,7 +125,9 @@ class _NotifyOfferScreenState extends State<NotifyOfferScreen>
     try {
       final granted = await widget.pulse.askConsent();
       if (granted) {
-        final token = await widget.pulse.refreshToken(notify: false);
+        final token = await widget.pulse.refreshTokenAfterConsent(
+          notify: false,
+        );
         if (token != null && token.isNotEmpty) {
           await widget.onPushTokenReady?.call(token);
         }

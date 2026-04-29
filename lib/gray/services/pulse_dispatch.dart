@@ -129,28 +129,65 @@ class PulseDispatch {
     }
   }
 
+  Future<String?> refreshTokenAfterConsent({bool notify = true}) async {
+    final m = _messaging;
+    if (m == null) {
+      debugPrint('[PULSE] refreshTokenAfterConsent skipped — Firebase missing');
+      return null;
+    }
+    try {
+      if (Platform.isIOS) {
+        // requestPermission() triggers registerForRemoteNotifications via
+        // Firebase Messaging swizzling. Give APNs more time here than at cold
+        // boot because the user has just explicitly accepted notifications.
+        await _waitForApnsToken(
+          retries: 14,
+          backoff: const Duration(milliseconds: 700),
+        );
+      }
+      _token = await m.getToken().timeout(const Duration(seconds: 10));
+      final fresh = _token;
+      debugPrint(
+          '[PULSE] refreshTokenAfterConsent=${fresh == null ? 'null' : 'present'}');
+      if (notify && fresh != null && fresh.isNotEmpty) {
+        onTokenRotated?.call(fresh);
+      }
+      return fresh;
+    } catch (err, st) {
+      debugPrint('[PULSE] refreshTokenAfterConsent failed: $err\n$st');
+      return null;
+    }
+  }
+
   // Number of poll attempts when waiting for the iOS APNs token. Spaced ~600ms
   // apart, which gives ~4.2s total — enough for typical TestFlight cold starts
   // without blocking the gray flow indefinitely.
   static const int _apnsRetries = 7;
   static const Duration _apnsBackoff = Duration(milliseconds: 600);
 
-  Future<void> _waitForApnsToken() async {
+  Future<void> _waitForApnsToken({
+    int retries = _apnsRetries,
+    Duration backoff = _apnsBackoff,
+  }) async {
     final m = _messaging;
     if (m == null) return;
-    for (var attempt = 0; attempt < _apnsRetries; attempt++) {
+    for (var attempt = 1; attempt <= retries; attempt++) {
       try {
         final apns = await m.getAPNSToken();
+        debugPrint(
+          '[PULSE] APNs token attempt $attempt/$retries: '
+          '${apns == null || apns.isEmpty ? 'null' : 'present'}',
+        );
         if (apns != null && apns.isNotEmpty) {
-          if (kDebugMode) debugPrint('[PULSE] APNs token ready');
+          debugPrint('[PULSE] APNs token ready');
           return;
         }
       } catch (err) {
-        if (kDebugMode) debugPrint('[PULSE] APNs poll error: $err');
+        debugPrint('[PULSE] APNs poll error: $err');
       }
-      await Future.delayed(_apnsBackoff);
+      await Future.delayed(backoff);
     }
-    if (kDebugMode) debugPrint('[PULSE] APNs token not received in time');
+    debugPrint('[PULSE] APNs token not received in time');
   }
 
   Future<void> _setupTray() async {
