@@ -29,3 +29,15 @@ const String kBestScoreKey = 'tower_falls.best_score';
 
 const String kPrivacyPolicyUrl = 'https://towerrfalls.com/privacy-policy.html';
 const String kSupportUrl = 'https://towerrfalls.com/support.html';
+
+const String kNotifyVideoPortrait =
+    'assets/notify/9x16_notification_screen.mp4';
+const String kNotifyVideoLandscape =
+    'assets/notify/16x9_notification_screen.mp4';
+
+const String kNoWifiBgPortrait =
+    'assets/aditional assets/nowifi_screen/nowifi_screen.webp';
+const String kNoWifiBgLandscape =
+    'assets/aditional assets/nowifi_screen/16x9_nowifi_screen.webp';
+const String kNoWifiButton =
+    'assets/aditional assets/nowifi_screen/nowifi_button.webp';

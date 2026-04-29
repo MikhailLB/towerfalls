@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../app_theme.dart';
 import '../game/constants.dart';
 import '../widgets/menu_button.dart';
 import 'game_screen.dart';
+import 'info_webview_screen.dart';
 
 class MainMenuScreen extends StatefulWidget {
   const MainMenuScreen({super.key});
@@ -38,14 +38,12 @@ class _MainMenuScreenState extends State<MainMenuScreen> {
     _loadBest();
   }
 
-  Future<void> _openUrl(String url) async {
-    final uri = Uri.parse(url);
-    final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
-    if (!ok && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Cannot open $url')),
-      );
-    }
+  Future<void> _openInfoPage(String url, String title) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => InfoWebViewScreen(url: url, title: title),
+      ),
+    );
   }
 
   @override
@@ -139,7 +137,10 @@ class _MainMenuScreenState extends State<MainMenuScreen> {
                         _LinkText(
                           icon: Icons.shield_outlined,
                           label: 'Privacy Policy',
-                          onTap: () => _openUrl(kPrivacyPolicyUrl),
+                          onTap: () => _openInfoPage(
+                            kPrivacyPolicyUrl,
+                            'Privacy Policy',
+                          ),
                         ),
                         const SizedBox(width: 18),
                         Container(
@@ -151,7 +152,10 @@ class _MainMenuScreenState extends State<MainMenuScreen> {
                         _LinkText(
                           icon: Icons.help_outline_rounded,
                           label: 'Support',
-                          onTap: () => _openUrl(kSupportUrl),
+                          onTap: () => _openInfoPage(
+                            kSupportUrl,
+                            'Support',
+                          ),
                         ),
                       ],
                     ),

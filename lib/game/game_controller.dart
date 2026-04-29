@@ -34,6 +34,18 @@ class GameController extends ChangeNotifier {
 
   static const double _softDropMultiplier = 4.0;
 
+  // Lock-delay safeguard. Once a piece is grounded (cannot move down) the
+  // player is allowed a small number of lateral / rotation adjustments before
+  // the piece is force-locked. This prevents abusing rotation kicks and rapid
+  // tap spam to indefinitely shift a piece past already placed blocks.
+  int _lockResets = 0;
+  static const int _maxLockResets = 4;
+  // After a piece is grounded we wait at most this many seconds before forcing
+  // a lock, regardless of player input. This makes a piece fall "naturally"
+  // even at low gravity once it has come to rest on a stack.
+  double _groundedTime = 0.0;
+  static const double _maxGroundedSeconds = 0.45;
+
   GameController() {
     _loadBest();
     _spawn();
@@ -106,13 +118,34 @@ class GameController extends ChangeNotifier {
       if (status != GameStatus.playing) break;
     }
 
+    // While the piece is grounded, accumulate "rest" time. Once we've sat on
+    // top of a stack for too long we force a lock even if the player keeps
+    // spamming rotations.
+    if (status == GameStatus.playing && _isGrounded()) {
+      _groundedTime += dtMs / 1000.0;
+      if (_groundedTime >= _maxGroundedSeconds) {
+        _lock();
+        anyStep = true;
+      }
+    } else {
+      _groundedTime = 0.0;
+    }
+
     if (!anyStep) {
       notifyListeners();
     }
   }
 
+  bool _isGrounded() {
+    final p = current;
+    if (p == null) return false;
+    return !board.canPlace(p.copyWith(row: p.row + 1));
+  }
+
   void _spawn() {
     _fallAccum = 0.0;
+    _lockResets = 0;
+    _groundedTime = 0.0;
     current = next ?? Piece.spawn(randomTetromino(), _random);
     next = Piece.spawn(randomTetromino(), _random);
     if (!board.canPlace(current!)) {
@@ -127,6 +160,8 @@ class GameController extends ChangeNotifier {
     final moved = current!.copyWith(row: current!.row + 1);
     if (board.canPlace(moved)) {
       current = moved;
+      _lockResets = 0;
+      _groundedTime = 0.0;
     } else {
       _lock();
     }
@@ -156,6 +191,7 @@ class GameController extends ChangeNotifier {
 
   void moveLeft() {
     if (status != GameStatus.playing) return;
+    if (_consumeLockResetIfGrounded()) return;
     final m = current!.copyWith(col: current!.col - 1);
     if (board.canPlace(m)) {
       current = m;
@@ -165,11 +201,26 @@ class GameController extends ChangeNotifier {
 
   void moveRight() {
     if (status != GameStatus.playing) return;
+    if (_consumeLockResetIfGrounded()) return;
     final m = current!.copyWith(col: current!.col + 1);
     if (board.canPlace(m)) {
       current = m;
       notifyListeners();
     }
+  }
+
+  /// Charges one lock-reset slot when the piece is currently grounded.
+  /// Returns true if the lock budget was exhausted and the piece was locked
+  /// in place — caller should abort its action in that case.
+  bool _consumeLockResetIfGrounded() {
+    if (!_isGrounded()) return false;
+    _lockResets++;
+    if (_lockResets > _maxLockResets) {
+      _lock();
+      notifyListeners();
+      return true;
+    }
+    return false;
   }
 
   void setSoftDrop(bool enabled) {
@@ -210,8 +261,12 @@ class GameController extends ChangeNotifier {
     if (status != GameStatus.playing) return;
     final rotations = current!.def.rotations.length;
     if (rotations <= 1) return;
+    if (_consumeLockResetIfGrounded()) return;
     final newRot = (current!.rotation + 1) % rotations;
-    for (final dx in const [0, -1, 1, -2, 2]) {
+    // Tight wall-kick: only allow the in-place rotation plus a single-cell
+    // nudge to either side. Larger kicks were enabling pieces to tunnel past
+    // already-stacked blocks via rotation spam.
+    for (final dx in const [0, -1, 1]) {
       final candidate = current!.copyWith(
         rotation: newRot,
         col: current!.col + dx,
@@ -248,6 +303,8 @@ class GameController extends ChangeNotifier {
     current = null;
     next = null;
     _fallAccum = 0;
+    _lockResets = 0;
+    _groundedTime = 0.0;
     status = GameStatus.playing;
     _spawn();
     _startLoop();

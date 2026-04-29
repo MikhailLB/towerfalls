@@ -8,8 +8,16 @@ import '../game/constants.dart';
 import '../widgets/loading_bar.dart';
 import 'main_menu_screen.dart';
 
+/// Branded loading splash. Plays the orientation-matched intro video and
+/// animates the engraved progress bar; once both the bar animation and the
+/// optional [routeFuture] have completed, navigates to the resolved page.
+///
+/// When [routeFuture] is null the screen falls back to the regular game
+/// entrypoint (main menu).
 class LoadingScreen extends StatefulWidget {
-  const LoadingScreen({super.key});
+  final Future<WidgetBuilder>? routeFuture;
+
+  const LoadingScreen({super.key, this.routeFuture});
 
   @override
   State<LoadingScreen> createState() => _LoadingScreenState();
@@ -24,6 +32,9 @@ class _LoadingScreenState extends State<LoadingScreen>
   bool _videoFailed = false;
   bool _progressStarted = false;
   bool _navigated = false;
+
+  WidgetBuilder? _resolvedBuilder;
+  bool _routeReady = false;
 
   @override
   void initState() {
@@ -41,8 +52,25 @@ class _LoadingScreenState extends State<LoadingScreen>
         if (mounted) setState(() {});
       })
       ..addStatusListener((status) {
-        if (status == AnimationStatus.completed) _goNext();
+        if (status == AnimationStatus.completed) _maybeGoNext();
       });
+
+    final future = widget.routeFuture;
+    if (future == null) {
+      _routeReady = true;
+    } else {
+      future.then((builder) {
+        if (!mounted) return;
+        _resolvedBuilder = builder;
+        _routeReady = true;
+        _maybeGoNext();
+      }).catchError((err, st) {
+        debugPrint('[LoadingScreen] route resolver failed: $err\n$st');
+        if (!mounted) return;
+        _routeReady = true;
+        _maybeGoNext();
+      });
+    }
   }
 
   @override
@@ -99,17 +127,22 @@ class _LoadingScreenState extends State<LoadingScreen>
     }
   }
 
+  void _maybeGoNext() {
+    if (_navigated) return;
+    if (_progress.status != AnimationStatus.completed) return;
+    if (!_routeReady) return;
+    _goNext();
+  }
+
   Future<void> _goNext() async {
     if (_navigated) return;
     _navigated = true;
-    await SystemChrome.setPreferredOrientations([
-      DeviceOrientation.portraitUp,
-    ]);
     if (!mounted) return;
+    final builder = _resolvedBuilder ?? (_) => const MainMenuScreen();
     Navigator.of(context).pushReplacement(
       PageRouteBuilder(
         transitionDuration: const Duration(milliseconds: 400),
-        pageBuilder: (context, a, b) => const MainMenuScreen(),
+        pageBuilder: (context, a, b) => Builder(builder: builder),
         transitionsBuilder: (context, anim, b, child) =>
             FadeTransition(opacity: anim, child: child),
       ),
@@ -126,6 +159,7 @@ class _LoadingScreenState extends State<LoadingScreen>
   @override
   Widget build(BuildContext context) {
     final orientation = MediaQuery.of(context).orientation;
+    final landscape = orientation == Orientation.landscape;
     final video = _video;
     final videoReady = video != null && video.value.isInitialized;
     final screenReady = videoReady || _videoFailed;
@@ -169,13 +203,17 @@ class _LoadingScreenState extends State<LoadingScreen>
             duration: const Duration(milliseconds: 300),
             opacity: screenReady ? 1 : 0,
             child: Align(
-              alignment: const Alignment(0, 0.75),
+              alignment: Alignment(0, landscape ? 0.62 : 0.75),
               child: FractionallySizedBox(
-                widthFactor:
-                    orientation == Orientation.landscape ? 0.45 : 0.72,
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  child: LoadingBar(progress: _progress.value),
+                widthFactor: landscape ? 0.30 : 0.72,
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxHeight: landscape ? 70 : 96,
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: LoadingBar(progress: _progress.value),
+                  ),
                 ),
               ),
             ),
@@ -184,12 +222,12 @@ class _LoadingScreenState extends State<LoadingScreen>
             duration: const Duration(milliseconds: 300),
             opacity: screenReady ? 1 : 0,
             child: Align(
-              alignment: const Alignment(0, 0.92),
+              alignment: Alignment(0, landscape ? 0.85 : 0.92),
               child: Text(
                 'LOADING  ${(_progress.value * 100).clamp(0, 100).toInt()}%',
-                style: const TextStyle(
+                style: TextStyle(
                   color: Colors.white70,
-                  fontSize: 14,
+                  fontSize: landscape ? 12 : 14,
                   letterSpacing: 3,
                   fontWeight: FontWeight.w700,
                 ),
