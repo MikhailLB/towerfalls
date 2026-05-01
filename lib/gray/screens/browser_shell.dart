@@ -491,7 +491,15 @@ class _BrowserShellState extends State<BrowserShell>
         body: Stack(
           fit: StackFit.expand,
           children: [
-            WebViewWidget(controller: _wv),
+            // Respect display cutout (camera notch) in both orientations
+            // without adding status-bar/nav-bar padding. In immersiveSticky
+            // mode MediaQuery.padding reflects only the cutout insets (the
+            // hidden status bar is no longer counted), so this keeps the
+            // WebView content clear of the physical notch on all devices.
+            Padding(
+              padding: MediaQuery.of(context).padding,
+              child: WebViewWidget(controller: _wv),
+            ),
             if (_loading)
               const ColoredBox(
                 color: Colors.black,
