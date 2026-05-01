@@ -218,22 +218,6 @@ class _LoadingScreenState extends State<LoadingScreen>
               ),
             ),
           ),
-          AnimatedOpacity(
-            duration: const Duration(milliseconds: 300),
-            opacity: screenReady ? 1 : 0,
-            child: Align(
-              alignment: Alignment(0, landscape ? 0.85 : 0.92),
-              child: Text(
-                'LOADING  ${(_progress.value * 100).clamp(0, 100).toInt()}%',
-                style: TextStyle(
-                  color: Colors.white70,
-                  fontSize: landscape ? 12 : 14,
-                  letterSpacing: 3,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ),
-          ),
         ],
       ),
     );
