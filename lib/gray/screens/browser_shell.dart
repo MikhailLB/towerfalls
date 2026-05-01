@@ -38,12 +38,10 @@ class BrowserShell extends StatefulWidget {
 class _BrowserShellState extends State<BrowserShell>
     with WidgetsBindingObserver {
   late final WebViewController _wv;
-  bool _loading = true;
   StreamSubscription<List<ConnectivityResult>>? _connSub;
   bool _routedOffline = false;
   String? _lastMainFrame;
   int _redirectRetries = 0;
-  String? _firstFinalUrl;
 
   Widget? _fullscreen;
   void Function()? _hideFullscreen;
@@ -157,17 +155,14 @@ class _BrowserShellState extends State<BrowserShell>
 
   NavigationDelegate _delegate() {
     return NavigationDelegate(
-      onPageStarted: (_) {
-        if (mounted) setState(() => _loading = true);
-      },
+      onPageStarted: (_) {},
       onPageFinished: (url) {
-        if (mounted) setState(() => _loading = false);
         _redirectRetries = 0;
-        _firstFinalUrl ??= url;
         _injectSafeAreaShim();
         _injectKeyboardScroll();
         _injectMediaAutoplay();
         _injectCameraBlocker();
+        _injectViewportNoZoom();
       },
       onWebResourceError: (err) {
         if (err.isForMainFrame != true) return;
@@ -457,6 +452,31 @@ class _BrowserShellState extends State<BrowserShell>
 ''');
   }
 
+  void _injectViewportNoZoom() {
+    _wv.runJavaScript(r'''
+(function(){
+  if (window.__tfNoZoom) return;
+  window.__tfNoZoom = true;
+  function fix(){
+    var vp = document.querySelector('meta[name="viewport"]');
+    if (!vp){
+      vp = document.createElement('meta');
+      vp.setAttribute('name','viewport');
+      (document.head || document.documentElement).appendChild(vp);
+    }
+    var c = (vp.getAttribute('content') || '')
+      .replace(/,?\s*(user-scalable|maximum-scale)\s*=\s*[^\s,]*/gi,'').trim();
+    vp.setAttribute('content', c + (c ? ', ' : '') + 'user-scalable=no, maximum-scale=1.0');
+  }
+  fix();
+  ['pushState','replaceState'].forEach(function(n){
+    var o=history[n]; history[n]=function(){var r=o.apply(this,arguments);setTimeout(fix,100);return r;};
+  });
+  window.addEventListener('popstate',function(){setTimeout(fix,100);});
+})();
+''');
+  }
+
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
@@ -474,28 +494,13 @@ class _BrowserShellState extends State<BrowserShell>
   Future<bool> _handleBack() async {
     if (_fullscreen != null) {
       _hideFullscreen?.call();
-      return false;
     }
-    try {
-      if (await _wv.canGoBack()) {
-        final current = await _wv.currentUrl();
-        if (current != null &&
-            _firstFinalUrl != null &&
-            current == _firstFinalUrl) {
-          return false;
-        }
-        await _wv.goBack();
-      }
-    } catch (_) {}
     return false;
   }
 
   @override
   Widget build(BuildContext context) {
-    final media = MediaQuery.of(context);
-    final safe = media.viewPadding;
-    final isLandscape =
-        MediaQuery.orientationOf(context) == Orientation.landscape;
+    final safe = MediaQuery.of(context).viewPadding;
 
     return PopScope(
       canPop: false,
@@ -517,25 +522,7 @@ class _BrowserShellState extends State<BrowserShell>
               ),
               child: WebViewWidget(controller: _wv),
             ),
-            if (_loading)
-              Container(
-                color: Colors.black.withValues(alpha: 0.5),
-                child: const Center(
-                  child: CircularProgressIndicator(
-                    valueColor:
-                        AlwaysStoppedAnimation<Color>(Colors.cyanAccent),
-                  ),
-                ),
-              ),
             if (_fullscreen != null) Positioned.fill(child: _fullscreen!),
-            Positioned(
-              left: safe.left + (isLandscape ? 6 : 8),
-              top: safe.top + 4,
-              child: _BackChip(
-                compact: isLandscape,
-                onTap: _handleBack,
-              ),
-            ),
           ],
         ),
       ),
@@ -543,29 +530,3 @@ class _BrowserShellState extends State<BrowserShell>
   }
 }
 
-class _BackChip extends StatelessWidget {
-  final Future<bool> Function() onTap;
-  final bool compact;
-
-  const _BackChip({required this.onTap, this.compact = false});
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: Colors.black.withValues(alpha: 0.45),
-      shape: const CircleBorder(),
-      child: InkWell(
-        customBorder: const CircleBorder(),
-        onTap: () => onTap(),
-        child: Padding(
-          padding: EdgeInsets.all(compact ? 7.0 : 8.0),
-          child: Icon(
-            Icons.arrow_back_ios_new_rounded,
-            color: Colors.white,
-            size: compact ? 18.0 : 22.0,
-          ),
-        ),
-      ),
-    );
-  }
-}

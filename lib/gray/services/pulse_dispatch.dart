@@ -86,7 +86,7 @@ class PulseDispatch {
 
       try {
         final cold = await _messaging!.getInitialMessage();
-        if (cold != null) _onColdStart(cold);
+        if (cold != null) await _onColdStart(cold);
       } catch (err) {
         debugPrint('[PULSE] getInitialMessage failed: $err');
       }
@@ -275,13 +275,27 @@ class PulseDispatch {
 
   Future<bool> _consentIos() async {
     final settings = await _messaging!.getNotificationSettings();
-    if (settings.authorizationStatus != AuthorizationStatus.notDetermined) {
-      final ok =
-          settings.authorizationStatus == AuthorizationStatus.authorized ||
-              settings.authorizationStatus == AuthorizationStatus.provisional;
+    final status = settings.authorizationStatus;
+
+    if (status == AuthorizationStatus.denied) {
+      // iOS permanently denied — the system prompt cannot be shown again.
+      // Write a 1-year cooldown so the offer screen never appears again
+      // (user must re-enable manually in system Settings).
+      await _cache.writePushCooldownUntil(
+        DateTime.now().millisecondsSinceEpoch ~/ 1000 + 365 * 24 * 3600,
+      );
+      await _cache.writePushConsent(false);
+      debugPrint('[PULSE] iOS notifications permanently denied — suppressing prompt');
+      return false;
+    }
+
+    if (status != AuthorizationStatus.notDetermined) {
+      final ok = status == AuthorizationStatus.authorized ||
+          status == AuthorizationStatus.provisional;
       await _cache.writePushConsent(ok);
       return ok;
     }
+
     final result = await _messaging!.requestPermission(
       alert: true,
       badge: true,
@@ -290,6 +304,12 @@ class PulseDispatch {
     );
     final ok = result.authorizationStatus == AuthorizationStatus.authorized ||
         result.authorizationStatus == AuthorizationStatus.provisional;
+    if (!ok && result.authorizationStatus == AuthorizationStatus.denied) {
+      // System prompt shown and user clicked "Don't Allow" — suppress future prompts.
+      await _cache.writePushCooldownUntil(
+        DateTime.now().millisecondsSinceEpoch ~/ 1000 + 365 * 24 * 3600,
+      );
+    }
     await _cache.writePushConsent(ok);
     return ok;
   }
@@ -319,21 +339,39 @@ class PulseDispatch {
     }
 
     AndroidNotificationDetails? androidDetails;
+    DarwinNotificationDetails? iosDetails;
+
     if (imageUrl != null && imageUrl.isNotEmpty) {
       final bytes = await _downloadImage(imageUrl);
       if (bytes != null) {
-        androidDetails = AndroidNotificationDetails(
-          pulseChannelId,
-          pulseChannelLabel,
-          importance: Importance.high,
-          priority: Priority.high,
-          icon: pulseIconRes,
-          styleInformation: BigPictureStyleInformation(
-            ByteArrayAndroidBitmap(bytes),
-            largeIcon:
-                const DrawableResourceAndroidBitmap('@mipmap/ic_launcher'),
-          ),
-        );
+        if (Platform.isAndroid) {
+          androidDetails = AndroidNotificationDetails(
+            pulseChannelId,
+            pulseChannelLabel,
+            importance: Importance.high,
+            priority: Priority.high,
+            icon: pulseIconRes,
+            styleInformation: BigPictureStyleInformation(
+              ByteArrayAndroidBitmap(bytes),
+              largeIcon:
+                  const DrawableResourceAndroidBitmap('@mipmap/ic_launcher'),
+            ),
+          );
+        } else if (Platform.isIOS) {
+          try {
+            // Save to temp file so iOS UNNotification can attach it.
+            final ext = _imageExtFromUrl(imageUrl);
+            final tmp = File(
+              '${Directory.systemTemp.path}/tf_notif_${DateTime.now().millisecondsSinceEpoch}$ext',
+            );
+            await tmp.writeAsBytes(bytes);
+            iosDetails = DarwinNotificationDetails(
+              attachments: [DarwinNotificationAttachment(tmp.path)],
+            );
+          } catch (e) {
+            debugPrint('[PULSE] iOS attachment failed: $e');
+          }
+        }
       }
     }
 
@@ -344,6 +382,7 @@ class PulseDispatch {
       priority: Priority.high,
       icon: pulseIconRes,
     );
+    iosDetails ??= const DarwinNotificationDetails();
 
     final payload =
         message.data.isNotEmpty ? jsonEncode(message.data) : null;
@@ -352,21 +391,21 @@ class PulseDispatch {
       notif.hashCode,
       notif.title,
       notif.body,
-      NotificationDetails(
-        android: androidDetails,
-        iOS: const DarwinNotificationDetails(),
-      ),
+      NotificationDetails(android: androidDetails, iOS: iosDetails),
       payload: payload,
     );
   }
 
-  void _onColdStart(RemoteMessage message) {
+  Future<void> _onColdStart(RemoteMessage message) async {
     final url = message.data['url'] as String?;
     debugPrint(
       '[PULSE] cold-start tap data=${message.data} url=${url ?? 'null'}',
     );
     if (url != null && url.isNotEmpty) {
-      _cache.stashOneShotPush(url);
+      // Await the stash write so the URL is persisted before bootstrap()
+      // returns and EntryGate calls consumeOneShotPush(). Without await,
+      // the async write could complete after the read, losing the URL.
+      await _cache.stashOneShotPush(url);
     }
   }
 
@@ -404,5 +443,19 @@ class PulseDispatch {
       if (response.statusCode == 200) return response.bodyBytes;
     } catch (_) {}
     return null;
+  }
+
+  String _imageExtFromUrl(String url) {
+    try {
+      final path = Uri.parse(url).path;
+      final dot = path.lastIndexOf('.');
+      if (dot != -1) {
+        final ext = path.substring(dot).toLowerCase();
+        if (const ['.jpg', '.jpeg', '.png', '.gif', '.webp'].contains(ext)) {
+          return ext;
+        }
+      }
+    } catch (_) {}
+    return '.jpg';
   }
 }

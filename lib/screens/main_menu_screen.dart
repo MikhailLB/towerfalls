@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../app_theme.dart';
@@ -19,6 +20,8 @@ class MainMenuScreen extends StatefulWidget {
 
 class _MainMenuScreenState extends State<MainMenuScreen> {
   int _best = 0;
+  File? _avatar;
+  static const String _kAvatarPath = 'tf.menu.avatar.path';
 
   @override
   void initState() {
@@ -28,12 +31,35 @@ class _MainMenuScreenState extends State<MainMenuScreen> {
       DeviceOrientation.portraitDown,
     ]);
     _loadBest();
+    _loadAvatar();
   }
 
   Future<void> _loadBest() async {
     final prefs = await SharedPreferences.getInstance();
     if (!mounted) return;
     setState(() => _best = prefs.getInt(kBestScoreKey) ?? 0);
+  }
+
+  Future<void> _loadAvatar() async {
+    final prefs = await SharedPreferences.getInstance();
+    final path = prefs.getString(_kAvatarPath);
+    if (path != null && File(path).existsSync()) {
+      if (mounted) setState(() => _avatar = File(path));
+    }
+  }
+
+  Future<void> _pickAvatar() async {
+    final picker = ImagePicker();
+    final picked = await picker.pickImage(
+      source: ImageSource.gallery,
+      maxWidth: 512,
+      maxHeight: 512,
+      imageQuality: 85,
+    );
+    if (picked == null || !mounted) return;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kAvatarPath, picked.path);
+    setState(() => _avatar = File(picked.path));
   }
 
   Future<void> _openGame() async {
@@ -81,6 +107,52 @@ class _MainMenuScreenState extends State<MainMenuScreen> {
                     child: Image.asset(kLogoNameAsset, fit: BoxFit.contain),
                   ),
                   const Spacer(flex: 2),
+                  GestureDetector(
+                    onTap: _pickAvatar,
+                    child: Stack(
+                      alignment: Alignment.bottomRight,
+                      children: [
+                        Container(
+                          width: 72,
+                          height: 72,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: Colors.white12,
+                            border: Border.all(
+                              color: kAccent.withValues(alpha: 0.6),
+                              width: 2,
+                            ),
+                            image: _avatar != null
+                                ? DecorationImage(
+                                    image: FileImage(_avatar!),
+                                    fit: BoxFit.cover,
+                                  )
+                                : null,
+                          ),
+                          child: _avatar == null
+                              ? const Icon(
+                                  Icons.person,
+                                  color: Colors.white38,
+                                  size: 36,
+                                )
+                              : null,
+                        ),
+                        Container(
+                          padding: const EdgeInsets.all(4),
+                          decoration: const BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: kAccent,
+                          ),
+                          child: const Icon(
+                            Icons.camera_alt,
+                            color: Colors.white,
+                            size: 12,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 14),
                   Container(
                     padding: const EdgeInsets.symmetric(
                         horizontal: 20, vertical: 12),
