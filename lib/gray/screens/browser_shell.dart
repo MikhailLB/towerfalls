@@ -58,7 +58,7 @@ class _BrowserShellState extends State<BrowserShell>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _applyOrientations();
-    _showSystemBars();
+    _applyFullscreen();
 
     _wv = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
@@ -89,19 +89,13 @@ class _BrowserShellState extends State<BrowserShell>
     SystemChrome.setPreferredOrientations(const []);
   }
 
-  void _showSystemBars() {
-    // Keep system bars visible in the WebView. Android's native rotate
-    // suggestion then appears in the navigation area instead of floating over
-    // the web content and blocking controls.
-    SystemChrome.setEnabledSystemUIMode(
-      SystemUiMode.manual,
-      overlays: SystemUiOverlay.values,
-    );
+  void _applyFullscreen() {
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) _showSystemBars();
+    if (state == AppLifecycleState.resumed) _applyFullscreen();
   }
 
   NavigationDelegate _buildDelegate() {
@@ -497,9 +491,7 @@ class _BrowserShellState extends State<BrowserShell>
         body: Stack(
           fit: StackFit.expand,
           children: [
-            SafeArea(
-              child: WebViewWidget(controller: _wv),
-            ),
+            WebViewWidget(controller: _wv),
             if (_loading)
               const ColoredBox(
                 color: Colors.black,
