@@ -1,9 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  Cleartext HTTP is permitted globally because the WebView destination loads
+  partner content over redirect chains we don't control at build time. Some
+  hops can be plain http:// before landing on the final HTTPS page.
+
+  User-installed CA certificates are explicitly NOT trusted. Allowing them is
+  the bigger Play Review red flag (it enables MITM via locally installed
+  certificates) and is unrelated to the redirect issue we actually need to
+  solve. Removing it removes most of the policy risk while still letting the
+  WebView follow http:// redirects.
+-->
 <network-security-config>
     <base-config cleartextTrafficPermitted="true">
         <trust-anchors>
             <certificates src="system" />
-            <certificates src="user" />
         </trust-anchors>
     </base-config>
 </network-security-config>
