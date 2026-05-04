@@ -22,6 +22,10 @@ class BrowserShell extends StatefulWidget {
   final RuntimeCache cache;
   final PulseDispatch pulse;
   final NetworkRadar radar;
+  // Fires once, on the first successful onPageFinished. Used by EntryGate to
+  // hold the loading splash up until the WebView has actually rendered the
+  // first page, so the user never sees the "100% bar → black screen" gap.
+  final VoidCallback? onFirstPaint;
 
   const BrowserShell({
     super.key,
@@ -29,6 +33,7 @@ class BrowserShell extends StatefulWidget {
     required this.cache,
     required this.pulse,
     required this.radar,
+    this.onFirstPaint,
   });
 
   @override
@@ -45,6 +50,7 @@ class _BrowserShellState extends State<BrowserShell>
 
   Widget? _fullscreen;
   void Function()? _hideFullscreen;
+  bool _firstPaintFired = false;
 
   StreamSubscription<RemoteMessage>? _pushSub;
 
@@ -163,6 +169,12 @@ class _BrowserShellState extends State<BrowserShell>
         _injectMediaAutoplay();
         _injectCameraBlocker();
         _injectInputFontSize();
+        if (!_firstPaintFired) {
+          _firstPaintFired = true;
+          try {
+            widget.onFirstPaint?.call();
+          } catch (_) {}
+        }
       },
       onWebResourceError: (err) {
         if (err.isForMainFrame != true) return;

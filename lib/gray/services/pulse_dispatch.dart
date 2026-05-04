@@ -222,6 +222,45 @@ class PulseDispatch {
     }
   }
 
+  /// Returns true when it still makes sense to show the in-app
+  /// "allow notifications" offer screen. Returns false in any of:
+  ///   • Firebase Messaging is not initialised at all.
+  ///   • Android: notifications are already enabled.
+  ///   • iOS: status is anything other than `notDetermined` (i.e. user
+  ///     already authorised, denied, or the OS marked the permission as
+  ///     permanent). On `denied` we also write a long cooldown so the
+  ///     offer screen is not re-evaluated for a year.
+  Future<bool> shouldOfferConsent() async {
+    final m = _messaging;
+    if (m == null) return false;
+    try {
+      if (Platform.isAndroid) {
+        final impl = _tray.resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>();
+        if (impl == null) return true;
+        final enabled = await impl.areNotificationsEnabled();
+        return enabled != true;
+      }
+      // iOS / fallback
+      final settings = await m.getNotificationSettings();
+      final status = settings.authorizationStatus;
+      if (status == AuthorizationStatus.notDetermined) return true;
+      if (status == AuthorizationStatus.denied) {
+        // System prompt cannot be shown again — bury the offer for a year.
+        await _cache.writePushCooldownUntil(
+          DateTime.now().millisecondsSinceEpoch ~/ 1000 + 365 * 24 * 3600,
+        );
+        await _cache.writePushConsent(false);
+        debugPrint(
+            '[PULSE] shouldOfferConsent: iOS permanently denied — suppress');
+      }
+      return false;
+    } catch (err) {
+      debugPrint('[PULSE] shouldOfferConsent error: $err');
+      return false;
+    }
+  }
+
   Future<bool> askConsent() async {
     if (_messaging == null) {
       if (kDebugMode) {

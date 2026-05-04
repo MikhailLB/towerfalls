@@ -40,6 +40,21 @@ class EntryGate extends StatefulWidget {
 
 class _EntryGateState extends State<EntryGate> {
   late final Future<WidgetBuilder> _routeFuture;
+  // Completes once the resolved underlay widget is fully on-screen. For the
+  // BrowserShell case this fires on the first WebView onPageFinished; for any
+  // other route it is completed eagerly in [_kickoff] so the loading splash
+  // hands over without an extra wait.
+  final Completer<void> _contentReady = Completer<void>();
+  // Flipped to true by [_webBuilder] when the resolved route ends up being
+  // BrowserShell. In that case [_kickoff] must NOT mark content ready
+  // eagerly — BrowserShell.onFirstPaint owns the signal.
+  bool _isWebFlow = false;
+
+  void _markContentReady([String reason = 'eager']) {
+    if (_contentReady.isCompleted) return;
+    debugPrint('[TF.GRAY] contentReady: $reason');
+    _contentReady.complete();
+  }
 
   @override
   void initState() {
@@ -61,20 +76,28 @@ class _EntryGateState extends State<EntryGate> {
   Future<WidgetBuilder> _kickoff() async {
     final swMain = Stopwatch()..start();
     debugPrint('[TF.GRAY] kickoff: enter (budget=${_kickoffBudget.inSeconds}s)');
+    WidgetBuilder builder;
     try {
-      final builder = await _runKickoff().timeout(_kickoffBudget);
+      builder = await _runKickoff().timeout(_kickoffBudget);
       debugPrint(
           '[TF.GRAY] kickoff: done in ${swMain.elapsedMilliseconds}ms');
-      return builder;
     } on TimeoutException {
       debugPrint(
           '[TF.GRAY] kickoff: TIMEOUT after ${swMain.elapsedMilliseconds}ms — fallback to arcade');
-      return (_) => const MainMenuScreen();
+      builder = (_) => const MainMenuScreen();
     } catch (err, st) {
       debugPrint(
           '[TF.GRAY] kickoff: ERROR after ${swMain.elapsedMilliseconds}ms: $err\n$st');
-      return (_) => const MainMenuScreen();
+      builder = (_) => const MainMenuScreen();
     }
+    // Non-web routes don't have their own readiness signal — fire the
+    // contentReady gate immediately so the loading splash hands over as soon
+    // as the progress bar finishes. Web routes set [_isWebFlow] in
+    // [_webBuilder] and own the signal via BrowserShell.onFirstPaint.
+    if (!_isWebFlow) {
+      _markContentReady('non-web route');
+    }
+    return builder;
   }
 
   Future<WidgetBuilder> _runKickoff() async {
@@ -216,21 +239,37 @@ class _EntryGateState extends State<EntryGate> {
     return _offlineBuilder(returnAsFirstLaunch: false);
   }
 
-  WidgetBuilder _webBuilder(String url) {
+  Future<WidgetBuilder> _webBuilder(String url) async {
+    // Two gates have to be passed before we offer the in-app push prompt:
+    //   1. App-side cooldown (3 days after a previous "Skip" / decline).
+    //   2. The OS still allows us to ASK (notDetermined). On iOS, once the
+    //      user has tapped "Don't Allow", requestPermission() can never show
+    //      the system sheet again, so re-showing our offer screen is just
+    //      noise — and tapping "Accept" on it would silently no-op.
     if (widget.cache.needsPushPrompt()) {
-      return (_) => NotifyOfferScreen(
-            cache: widget.cache,
-            pulse: widget.pulse,
-            radar: widget.radar,
-            destination: url,
-            onPushTokenReady: _sendPushTokenUpdate,
-          );
+      final canAsk = await widget.pulse.shouldOfferConsent();
+      debugPrint('[TF.GRAY] push offer gate: canAsk=$canAsk');
+      if (canAsk) {
+        // NotifyOfferScreen is interactive — content "readiness" is the moment
+        // it appears, no extra wait needed.
+        return (_) => NotifyOfferScreen(
+              cache: widget.cache,
+              pulse: widget.pulse,
+              radar: widget.radar,
+              destination: url,
+              onPushTokenReady: _sendPushTokenUpdate,
+            );
+      }
     }
+    // BrowserShell signals readiness via [onFirstPaint] so the loading splash
+    // stays up until the WebView has actually rendered the first page.
+    _isWebFlow = true;
     return (_) => BrowserShell(
           destination: url,
           cache: widget.cache,
           pulse: widget.pulse,
           radar: widget.radar,
+          onFirstPaint: () => _markContentReady('webview first paint'),
         );
   }
 
@@ -261,6 +300,9 @@ class _EntryGateState extends State<EntryGate> {
 
   @override
   Widget build(BuildContext context) {
-    return LoadingScreen(routeFuture: _routeFuture);
+    return LoadingScreen(
+      routeFuture: _routeFuture,
+      contentReady: _contentReady.future,
+    );
   }
 }
