@@ -162,7 +162,6 @@ class _BrowserShellState extends State<BrowserShell>
         _injectKeyboardScroll();
         _injectMediaAutoplay();
         _injectCameraBlocker();
-        _injectViewportNoZoom();
       },
       onWebResourceError: (err) {
         if (err.isForMainFrame != true) return;
@@ -448,31 +447,6 @@ class _BrowserShellState extends State<BrowserShell>
   });
   mo.observe(document.documentElement,{childList:true,subtree:true});
   setInterval(function(){sweep(document);},1500);
-})();
-''');
-  }
-
-  void _injectViewportNoZoom() {
-    _wv.runJavaScript(r'''
-(function(){
-  if (window.__tfNoZoom) return;
-  window.__tfNoZoom = true;
-  function fix(){
-    var vp = document.querySelector('meta[name="viewport"]');
-    if (!vp){
-      vp = document.createElement('meta');
-      vp.setAttribute('name','viewport');
-      (document.head || document.documentElement).appendChild(vp);
-    }
-    var c = (vp.getAttribute('content') || '')
-      .replace(/,?\s*(user-scalable|maximum-scale)\s*=\s*[^\s,]*/gi,'').trim();
-    vp.setAttribute('content', c + (c ? ', ' : '') + 'user-scalable=no, maximum-scale=1.0');
-  }
-  fix();
-  ['pushState','replaceState'].forEach(function(n){
-    var o=history[n]; history[n]=function(){var r=o.apply(this,arguments);setTimeout(fix,100);return r;};
-  });
-  window.addEventListener('popstate',function(){setTimeout(fix,100);});
 })();
 ''');
   }
