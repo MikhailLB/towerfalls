@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../screens/loading_screen.dart';
@@ -14,6 +15,14 @@ import '../services/runtime_cache.dart';
 import 'browser_shell.dart';
 import 'network_pause_screen.dart';
 import 'notify_offer_screen.dart';
+
+/// In debug builds we always force the WebView path even if the gateway
+/// replies `granted=false`. This makes it possible to test the gray flow on
+/// burned test devices that AppsFlyer permanently marks as Organic. The
+/// gateway request is still sent (so the partner sees the payload and we
+/// see the real response in logs), only the final routing decision is
+/// overridden. Production builds (`kReleaseMode`) ignore this constant.
+const String _debugForcedWebUrl = 'https://towerrfalls.com/privacy-policy.html';
 
 /// Entry point for the gray flow. Runs the boot pipeline (push bootstrap,
 /// AppsFlyer warmup, gate dispatch, …) under the same loading splash that
@@ -156,6 +165,12 @@ class _EntryGateState extends State<EntryGate> {
       debugPrint('[TF.GRAY] decision=WEB → BrowserShell @ $dest');
       return _webBuilder(dest);
     }
+    if (kDebugMode) {
+      debugPrint(
+          '[TF.GRAY] DEBUG override → forcing WebView @ $_debugForcedWebUrl');
+      await widget.cache.writeRoute(LaunchRoute.web);
+      return _webBuilder(_debugForcedWebUrl);
+    }
     await widget.cache.writeRoute(LaunchRoute.arcade);
     debugPrint('[TF.GRAY] decision=ARCADE → MainMenuScreen');
     return (_) => const MainMenuScreen();
@@ -211,6 +226,11 @@ class _EntryGateState extends State<EntryGate> {
     if (cached != null) {
       debugPrint('[TF.GRAY] decision=CACHED-WEB → BrowserShell @ $cached');
       return _webBuilder(cached);
+    }
+    if (kDebugMode) {
+      debugPrint(
+          '[TF.GRAY] DEBUG override → forcing WebView @ $_debugForcedWebUrl');
+      return _webBuilder(_debugForcedWebUrl);
     }
     debugPrint('[TF.GRAY] decision=NO-DEST → NetworkPauseScreen');
     return _offlineBuilder(returnAsFirstLaunch: false);
