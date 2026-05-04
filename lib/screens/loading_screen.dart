@@ -15,20 +15,32 @@ import 'main_menu_screen.dart';
 /// When [routeFuture] is null the screen falls back to the regular game
 /// entrypoint (main menu).
 ///
-/// When [contentReady] is provided the splash mounts the resolved widget
-/// underneath itself as soon as [routeFuture] resolves and only fades out
-/// after [contentReady] also completes (with a hard timeout fallback). This
-/// is what the gray flow uses to keep the splash visible until the WebView
-/// has actually painted its first page, so the bar never reaches 100%
-/// before the underlying content is on screen.
+/// When [contentReady] is provided AND [keepAsUnderlay] resolves to true the
+/// splash mounts the resolved widget underneath itself as soon as
+/// [routeFuture] resolves and only fades out after [contentReady] also
+/// completes (with a hard timeout fallback). This is what the gray flow uses
+/// to keep the splash visible until the WebView has actually painted its
+/// first page, so the bar never reaches 100% before the underlying content
+/// is on screen.
+///
+/// For routes that don't need to preserve their state across the handover
+/// (e.g. the arcade MainMenu, the offline NetworkPause screen), the underlay
+/// trick is skipped — those use the classic [Navigator.pushReplacement] path
+/// so they end up as proper top-level routes (otherwise pushing further
+/// routes from a deeply-nested Builder context can hang on iOS).
 class LoadingScreen extends StatefulWidget {
   final Future<WidgetBuilder>? routeFuture;
   final Future<void>? contentReady;
+  // Resolves to true when the resolved widget is something we MUST keep
+  // mounted (so it doesn't lose state on handover — i.e. WebView). When
+  // false / null we fall back to Navigator.pushReplacement.
+  final Future<bool>? keepAsUnderlay;
 
   const LoadingScreen({
     super.key,
     this.routeFuture,
     this.contentReady,
+    this.keepAsUnderlay,
   });
 
   @override
@@ -54,6 +66,14 @@ class _LoadingScreenState extends State<LoadingScreen>
   bool _routeReady = false;
   bool _contentReady = false;
   bool _splashVisible = true;
+  // Resolved at handover time. Defaults to false — we only switch to underlay
+  // mode when [keepAsUnderlay] explicitly resolves true.
+  bool _useUnderlay = false;
+  // null = decision not yet known, true/false = decided. We only mount the
+  // resolved widget as an underlay when this is explicitly true; otherwise
+  // it stays out of the tree entirely and gets promoted via pushReplacement
+  // (which is what every non-web route in the gray flow expects).
+  bool? _keepDecision;
 
   @override
   void initState() {
@@ -91,6 +111,19 @@ class _LoadingScreenState extends State<LoadingScreen>
         if (!mounted) return;
         setState(() => _routeReady = true);
         _maybeGoNext();
+      });
+    }
+
+    final keep = widget.keepAsUnderlay;
+    if (keep == null) {
+      _keepDecision = false;
+    } else {
+      keep.then((v) {
+        if (!mounted) return;
+        setState(() => _keepDecision = v);
+      }).catchError((_) {
+        if (!mounted) return;
+        setState(() => _keepDecision = false);
       });
     }
 
@@ -179,17 +212,25 @@ class _LoadingScreenState extends State<LoadingScreen>
     if (_navigated) return;
     _navigated = true;
 
-    // When [contentReady] was provided, the resolved widget is already mounted
-    // underneath us — just fade the splash out and remove the splash widgets
-    // from the tree. No Navigator transition: the underlay stays exactly where
-    // it is so the WebView keeps its state.
-    if (widget.contentReady != null) {
-      // The resolved widget owns the screen now and is responsible for its
-      // own orientation/UI chrome (BrowserShell relocks landscape, the
-      // arcade screens relock portrait, etc.). Just trigger the
-      // AnimatedOpacity fade-out; the actual removal from the tree happens
-      // in its onEnd callback.
-      if (mounted) setState(() {});
+    // Decide handover mode: keep mounted as underlay (state-preserving) or
+    // promote to its own route via pushReplacement (default).
+    bool keep = false;
+    final keepFuture = widget.keepAsUnderlay;
+    if (keepFuture != null) {
+      try {
+        keep = await keepFuture
+            .timeout(const Duration(milliseconds: 500), onTimeout: () => false);
+      } catch (_) {
+        keep = false;
+      }
+    }
+    if (!mounted) return;
+
+    if (keep) {
+      // Underlay mode — the resolved widget is already mounted beneath the
+      // splash. Just fade the splash out; AnimatedOpacity.onEnd removes it
+      // from the tree and disposes the heavy bits (video player, ticker).
+      setState(() => _useUnderlay = true);
       return;
     }
 
@@ -207,6 +248,25 @@ class _LoadingScreenState extends State<LoadingScreen>
             FadeTransition(opacity: anim, child: child),
       ),
     );
+  }
+
+  // Free the loading-splash assets the moment we no longer need them. Without
+  // this the AVPlayer + Ticker keep running for the whole session in underlay
+  // mode and on iOS they meaningfully fight the game / WebView for resources
+  // (frame drops, occasional input deadlocks).
+  Future<void> _disposeSplashAssets() async {
+    final video = _video;
+    _video = null;
+    try {
+      _progress.stop();
+    } catch (_) {}
+    try {
+      await video?.pause();
+    } catch (_) {}
+    try {
+      await video?.dispose();
+    } catch (_) {}
+    if (mounted) setState(() {});
   }
 
   @override
@@ -281,49 +341,42 @@ class _LoadingScreenState extends State<LoadingScreen>
 
   @override
   Widget build(BuildContext context) {
-    final useUnderlay = widget.contentReady != null;
-
-    if (useUnderlay) {
-      // Underlay-mode: when the resolved widget is known, mount it BEHIND the
-      // splash so it can start loading (e.g. WebView fetches the URL) while
-      // the user still sees the loading video. After both progress + content
-      // are ready, the splash is fully removed from the tree, leaving just
-      // the underlay.
-      return Scaffold(
-        backgroundColor: Colors.black,
-        body: Stack(
-          fit: StackFit.expand,
-          children: [
-            if (_resolvedBuilder != null)
-              Positioned.fill(child: Builder(builder: _resolvedBuilder!)),
-            if (_splashVisible)
-              Positioned.fill(
-                // While the splash is on top, swallow all touches so the user
-                // can't tap "through" into the still-loading underlay.
-                child: AbsorbPointer(
-                  absorbing: !_navigated,
-                  child: AnimatedOpacity(
-                    duration: const Duration(milliseconds: 400),
-                    opacity: _navigated ? 0.0 : 1.0,
-                    onEnd: () {
-                      if (_navigated && mounted && _splashVisible) {
-                        // After fade completes, kill the splash (and free the
-                        // video player) so it stops drawing entirely.
-                        setState(() => _splashVisible = false);
-                      }
-                    },
-                    child: _buildSplash(context),
-                  ),
-                ),
-              ),
-          ],
-        ),
-      );
-    }
+    // Single, stable tree shape so the underlay widget (e.g. BrowserShell
+    // hosting a WKWebView) keeps the same Element across the splash → ready
+    // mode switch and never gets re-mounted (which would tear down the
+    // WebView and lose its loading state). We only mount it when the host
+    // explicitly asked for underlay mode (web flow); otherwise the resolved
+    // widget is launched via Navigator.pushReplacement in [_goNext].
+    final renderUnderlay =
+        _keepDecision == true && _resolvedBuilder != null;
 
     return Scaffold(
       backgroundColor: Colors.black,
-      body: _buildSplash(context),
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          if (renderUnderlay)
+            Positioned.fill(child: Builder(builder: _resolvedBuilder!)),
+          if (_splashVisible)
+            Positioned.fill(
+              child: AbsorbPointer(
+                absorbing: !_useUnderlay,
+                child: AnimatedOpacity(
+                  duration: const Duration(milliseconds: 400),
+                  opacity: _useUnderlay ? 0.0 : 1.0,
+                  onEnd: () async {
+                    if (!mounted || !_splashVisible) return;
+                    if (_useUnderlay) {
+                      setState(() => _splashVisible = false);
+                      await _disposeSplashAssets();
+                    }
+                  },
+                  child: _buildSplash(context),
+                ),
+              ),
+            ),
+        ],
+      ),
     );
   }
 }

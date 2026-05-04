@@ -45,6 +45,12 @@ class _EntryGateState extends State<EntryGate> {
   // other route it is completed eagerly in [_kickoff] so the loading splash
   // hands over without an extra wait.
   final Completer<void> _contentReady = Completer<void>();
+  // Tells LoadingScreen whether the resolved widget must stay mounted
+  // beneath the splash (web flow → preserve WebView state) or whether it
+  // should be promoted to a top-level route via Navigator.pushReplacement
+  // (every other route — MainMenu, NetworkPause, NotifyOffer — was mounted
+  // that way originally and depends on having its own route to push from).
+  final Completer<bool> _keepUnderlay = Completer<bool>();
   // Flipped to true by [_webBuilder] when the resolved route ends up being
   // BrowserShell. In that case [_kickoff] must NOT mark content ready
   // eagerly — BrowserShell.onFirstPaint owns the signal.
@@ -96,6 +102,9 @@ class _EntryGateState extends State<EntryGate> {
     // [_webBuilder] and own the signal via BrowserShell.onFirstPaint.
     if (!_isWebFlow) {
       _markContentReady('non-web route');
+    }
+    if (!_keepUnderlay.isCompleted) {
+      _keepUnderlay.complete(_isWebFlow);
     }
     return builder;
   }
@@ -303,6 +312,7 @@ class _EntryGateState extends State<EntryGate> {
     return LoadingScreen(
       routeFuture: _routeFuture,
       contentReady: _contentReady.future,
+      keepAsUnderlay: _keepUnderlay.future,
     );
   }
 }
