@@ -162,6 +162,7 @@ class _BrowserShellState extends State<BrowserShell>
         _injectKeyboardScroll();
         _injectMediaAutoplay();
         _injectCameraBlocker();
+        _injectInputFontSize();
       },
       onWebResourceError: (err) {
         if (err.isForMainFrame != true) return;
@@ -447,6 +448,28 @@ class _BrowserShellState extends State<BrowserShell>
   });
   mo.observe(document.documentElement,{childList:true,subtree:true});
   setInterval(function(){sweep(document);},1500);
+})();
+''');
+  }
+
+  // Prevent iOS WKWebView auto-zoom on input focus by forcing input font-size
+  // to 16px via a one-shot CSS injection. iOS only zooms when the computed
+  // font-size is less than 16px, so this disables the behaviour without
+  // touching <meta viewport> (which previously caused crashes when patched
+  // dynamically while the page was handling focus events).
+  void _injectInputFontSize() {
+    if (!Platform.isIOS) return;
+    _wv.runJavaScript(r'''
+(function(){
+  if (window.__tfInputFs) return;
+  window.__tfInputFs = true;
+  try {
+    var s = document.createElement('style');
+    s.id = '__tfInputFs';
+    s.textContent =
+      'input,textarea,select,[contenteditable=true]{font-size:16px!important;}';
+    (document.head || document.documentElement).appendChild(s);
+  } catch(_){}
 })();
 ''');
   }
