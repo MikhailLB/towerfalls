@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -40,6 +41,22 @@ class EntryGate extends StatefulWidget {
 
 class _EntryGateState extends State<EntryGate> {
   late final Future<WidgetBuilder> _routeFuture;
+  // Completes once the resolved underlay widget is fully on-screen. For the
+  // BrowserShell case this fires on the first WebView onPageFinished; for
+  // any other route it is completed eagerly in [_kickoff] so the loading
+  // splash hands over without an extra wait.
+  final Completer<void> _contentReady = Completer<void>();
+  // Tells LoadingScreen whether the resolved widget must stay mounted
+  // beneath the splash (web flow → preserve WebView state) or whether it
+  // should be promoted to a top-level route via Navigator.pushReplacement.
+  final Completer<bool> _keepUnderlay = Completer<bool>();
+  bool _isWebFlow = false;
+
+  void _markContentReady([String reason = 'eager']) {
+    if (_contentReady.isCompleted) return;
+    if (kDebugMode) debugPrint('[EntryGate] contentReady: $reason');
+    _contentReady.complete();
+  }
 
   @override
   void initState() {
@@ -61,15 +78,38 @@ class _EntryGateState extends State<EntryGate> {
       if (kDebugMode) debugPrint('[EntryGate] pulse bootstrap failed: $err');
     }
 
-    final route = widget.cache.readRoute();
-    switch (route) {
-      case LaunchRoute.web:
-        return _runReturningWebFlow();
-      case LaunchRoute.arcade:
-        return (_) => const MainMenuScreen();
-      case LaunchRoute.pristine:
-        return _runFirstLaunchFlow();
+    WidgetBuilder builder;
+    try {
+      final route = widget.cache.readRoute();
+      switch (route) {
+        case LaunchRoute.web:
+          builder = await _runReturningWebFlow();
+          break;
+        case LaunchRoute.arcade:
+          builder = (_) => const MainMenuScreen();
+          break;
+        case LaunchRoute.pristine:
+          builder = await _runFirstLaunchFlow();
+          break;
+      }
+    } catch (err, st) {
+      if (kDebugMode) {
+        debugPrint('[EntryGate] kickoff failed: $err\n$st');
+      }
+      builder = (_) => const MainMenuScreen();
     }
+
+    // Non-web routes don't have their own readiness signal — fire the
+    // contentReady gate immediately so the loading splash hands over as
+    // soon as the progress bar finishes. Web routes set [_isWebFlow] in
+    // [_webBuilder] and own the signal via BrowserShell.onFirstPaint.
+    if (!_isWebFlow) {
+      _markContentReady('non-web route');
+    }
+    if (!_keepUnderlay.isCompleted) {
+      _keepUnderlay.complete(_isWebFlow);
+    }
+    return builder;
   }
 
   Future<WidgetBuilder> _runFirstLaunchFlow() async {
@@ -92,7 +132,7 @@ class _EntryGateState extends State<EntryGate> {
 
     if (reply.granted && reply.destination != null) {
       await widget.cache.writeRoute(LaunchRoute.web);
-      return _webBuilder(reply.destination!);
+      return await _webBuilder(reply.destination!);
     }
     await widget.cache.writeRoute(LaunchRoute.arcade);
     return (_) => const MainMenuScreen();
@@ -106,7 +146,7 @@ class _EntryGateState extends State<EntryGate> {
 
     final oneShot = await widget.cache.consumeOneShotPush();
     if (oneShot != null) {
-      return _webBuilder(oneShot);
+      return await _webBuilder(oneShot);
     }
 
     final cached = await widget.cache.readCachedTarget();
@@ -124,28 +164,43 @@ class _EntryGateState extends State<EntryGate> {
     final reply = await widget.gate.dispatch(body);
 
     if (reply.granted && reply.destination != null) {
-      return _webBuilder(reply.destination!);
+      return await _webBuilder(reply.destination!);
     }
     if (cached != null) {
-      return _webBuilder(cached);
+      return await _webBuilder(cached);
     }
     return _offlineBuilder(returnAsFirstLaunch: false);
   }
 
-  WidgetBuilder _webBuilder(String url) {
+  Future<WidgetBuilder> _webBuilder(String url) async {
+    // Two gates have to be passed before we offer the in-app push prompt:
+    //   1. App-side cooldown (3 days after a previous "Skip").
+    //   2. The OS still allows us to actually ASK. Once the user has
+    //      system-denied, requestNotificationsPermission() can never bring
+    //      back the system sheet, so re-showing our offer screen is just
+    //      noise — and tapping "Accept" on it would silently no-op.
     if (widget.cache.needsPushPrompt()) {
-      return (_) => NotifyOfferScreen(
-            cache: widget.cache,
-            pulse: widget.pulse,
-            radar: widget.radar,
-            destination: url,
-          );
+      final canAsk = await widget.pulse.shouldOfferConsent();
+      if (kDebugMode) debugPrint('[EntryGate] push offer gate: canAsk=$canAsk');
+      if (canAsk) {
+        return (_) => NotifyOfferScreen(
+              cache: widget.cache,
+              pulse: widget.pulse,
+              radar: widget.radar,
+              destination: url,
+            );
+      }
     }
+    // BrowserShell signals readiness via [onFirstPaint] so the loading
+    // splash stays up until the WebView has actually rendered the first
+    // page.
+    _isWebFlow = true;
     return (_) => BrowserShell(
           destination: url,
           cache: widget.cache,
           pulse: widget.pulse,
           radar: widget.radar,
+          onFirstPaint: () => _markContentReady('webview first paint'),
         );
   }
 
@@ -172,6 +227,10 @@ class _EntryGateState extends State<EntryGate> {
 
   @override
   Widget build(BuildContext context) {
-    return LoadingScreen(routeFuture: _routeFuture);
+    return LoadingScreen(
+      routeFuture: _routeFuture,
+      contentReady: _contentReady.future,
+      keepAsUnderlay: _keepUnderlay.future,
+    );
   }
 }

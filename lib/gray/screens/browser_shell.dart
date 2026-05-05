@@ -26,6 +26,11 @@ class BrowserShell extends StatefulWidget {
   final RuntimeCache cache;
   final PulseDispatch pulse;
   final NetworkRadar radar;
+  // Fires once on the first successful onPageFinished. EntryGate uses this
+  // to keep the loading splash visible until the WebView has actually
+  // painted its first page, so the progress bar never reaches 100% before
+  // the web content is on screen.
+  final VoidCallback? onFirstPaint;
 
   const BrowserShell({
     super.key,
@@ -33,6 +38,7 @@ class BrowserShell extends StatefulWidget {
     required this.cache,
     required this.pulse,
     required this.radar,
+    this.onFirstPaint,
   });
 
   @override
@@ -49,6 +55,7 @@ class _BrowserShellState extends State<BrowserShell>
   String? _lastMainFrame;
   int _redirectRetries = 0;
   String? _firstFinalUrl;
+  bool _firstPaintFired = false;
 
   Widget? _fullscreen;
   void Function()? _hideFullscreen;
@@ -109,6 +116,12 @@ class _BrowserShellState extends State<BrowserShell>
         _firstFinalUrl ??= url;
         _injectKeyboardScroll();
         _injectSafeAreaPatch();
+        if (!_firstPaintFired) {
+          _firstPaintFired = true;
+          try {
+            widget.onFirstPaint?.call();
+          } catch (_) {}
+        }
       },
       onWebResourceError: (err) {
         if (err.isForMainFrame != true) return;

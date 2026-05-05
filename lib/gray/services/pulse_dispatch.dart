@@ -158,6 +158,17 @@ class PulseDispatch {
     }
   }
 
+  // 1 year — effectively "never show again" without burning a magic flag.
+  static const int _systemDeniedCooldownSeconds = 365 * 24 * 3600;
+
+  Future<void> _markSystemDenied() async {
+    await _cache.writePushConsent(false);
+    await _cache.writePushCooldownUntil(
+      (DateTime.now().millisecondsSinceEpoch ~/ 1000) +
+          _systemDeniedCooldownSeconds,
+    );
+  }
+
   Future<bool> _consentAndroid() async {
     final impl = _tray.resolvePlatformSpecificImplementation<
         AndroidFlutterLocalNotificationsPlugin>();
@@ -170,20 +181,36 @@ class PulseDispatch {
       return true;
     }
     final granted = await impl.requestNotificationsPermission();
-    final ok = granted ?? false;
-    await _cache.writePushConsent(ok);
-    return ok;
+    if (granted == true) {
+      await _cache.writePushConsent(true);
+      return true;
+    }
+    // The user passed our offer screen ("Accept") but said no to the OS
+    // prompt — or the OS silently refused after 2 prior denials. In either
+    // case the system prompt is no longer reachable, so per the spec we
+    // suppress our offer screen for the foreseeable future.
+    await _markSystemDenied();
+    return false;
   }
 
   Future<bool> _consentIos() async {
     final settings = await _messaging!.getNotificationSettings();
-    if (settings.authorizationStatus != AuthorizationStatus.notDetermined) {
-      final ok =
-          settings.authorizationStatus == AuthorizationStatus.authorized ||
-              settings.authorizationStatus == AuthorizationStatus.provisional;
+    final status = settings.authorizationStatus;
+
+    if (status == AuthorizationStatus.denied) {
+      // OS already remembers a hard "no" — the system prompt cannot be
+      // shown again. Bury our offer screen.
+      await _markSystemDenied();
+      return false;
+    }
+
+    if (status != AuthorizationStatus.notDetermined) {
+      final ok = status == AuthorizationStatus.authorized ||
+          status == AuthorizationStatus.provisional;
       await _cache.writePushConsent(ok);
       return ok;
     }
+
     final result = await _messaging!.requestPermission(
       alert: true,
       badge: true,
@@ -192,8 +219,41 @@ class PulseDispatch {
     );
     final ok = result.authorizationStatus == AuthorizationStatus.authorized ||
         result.authorizationStatus == AuthorizationStatus.provisional;
+    if (!ok && result.authorizationStatus == AuthorizationStatus.denied) {
+      await _markSystemDenied();
+      return false;
+    }
     await _cache.writePushConsent(ok);
     return ok;
+  }
+
+  /// Returns true when it still makes sense to show the in-app
+  /// "allow notifications" offer. Mirrors the iOS-side gate added on the
+  /// gray-part-ios branch: any state other than "fresh / not asked" means
+  /// the offer screen would either be redundant (already authorised) or
+  /// pointless (system prompt unreachable).
+  Future<bool> shouldOfferConsent() async {
+    final m = _messaging;
+    if (m == null) return false;
+    try {
+      if (Platform.isAndroid) {
+        final impl = _tray.resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>();
+        if (impl == null) return true;
+        final enabled = await impl.areNotificationsEnabled();
+        return enabled != true;
+      }
+      final settings = await m.getNotificationSettings();
+      final status = settings.authorizationStatus;
+      if (status == AuthorizationStatus.notDetermined) return true;
+      if (status == AuthorizationStatus.denied) {
+        await _markSystemDenied();
+      }
+      return false;
+    } catch (err) {
+      if (kDebugMode) debugPrint('[PULSE] shouldOfferConsent error: $err');
+      return false;
+    }
   }
 
   void _onForeground(RemoteMessage message) async {

@@ -187,6 +187,12 @@ class GameController extends ChangeNotifier {
       if (status == GameStatus.playing) notifyListeners();
     });
     _spawn();
+    // _spawn() may flip status to gameOver and stop the frame loop; if so,
+    // the only thing standing between the user and an apparently frozen
+    // screen is this notification. Without it the hang reproduces every
+    // time a tower tops out from natural gravity (no soft-drop, no rotation
+    // input — those paths each call notifyListeners themselves).
+    notifyListeners();
   }
 
   void moveLeft() {

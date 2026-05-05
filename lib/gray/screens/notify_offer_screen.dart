@@ -121,10 +121,12 @@ class _NotifyOfferScreenState extends State<NotifyOfferScreen>
     if (_busy) return;
     setState(() => _busy = true);
     try {
-      final granted = await widget.pulse.askConsent();
-      if (!granted) {
-        await _registerCooldown();
-      }
+      // pulse.askConsent now owns the cooldown decision: when the system
+      // prompt comes back denied (or was unreachable) it writes a long
+      // "system-denied" cooldown internally. We must NOT layer the 3-day
+      // skip-cooldown on top of that, otherwise the offer screen would
+      // re-appear three days after a permanent system refusal.
+      await widget.pulse.askConsent();
       _openShell();
     } finally {
       if (mounted) setState(() => _busy = false);
