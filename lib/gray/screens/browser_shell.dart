@@ -56,6 +56,14 @@ class _BrowserShellState extends State<BrowserShell>
   int _redirectRetries = 0;
   String? _firstFinalUrl;
   bool _firstPaintFired = false;
+  // Debounces the "page is actually visible" signal across redirect chains.
+  // onPageFinished fires for EVERY page in the chain (incl. the intermediate
+  // 30x landing pages that are usually blank), so naively firing onFirstPaint
+  // on the very first onPageFinished would hide the splash before the real
+  // landing page is on screen — which is exactly what the user reported as
+  // "loading bar at 100% then web shows up a couple of seconds later".
+  Timer? _firstPaintDebouncer;
+  static const Duration _firstPaintQuietPeriod = Duration(milliseconds: 700);
 
   Widget? _fullscreen;
   void Function()? _hideFullscreen;
@@ -109,6 +117,10 @@ class _BrowserShellState extends State<BrowserShell>
     return NavigationDelegate(
       onPageStarted: (_) {
         if (mounted) setState(() => _loading = true);
+        // A new page started loading → the previous onPageFinished was
+        // probably a redirect, so cancel any pending first-paint signal and
+        // wait for the next "settled" page.
+        _firstPaintDebouncer?.cancel();
       },
       onPageFinished: (url) {
         if (mounted) setState(() => _loading = false);
@@ -116,12 +128,7 @@ class _BrowserShellState extends State<BrowserShell>
         _firstFinalUrl ??= url;
         _injectKeyboardScroll();
         _injectSafeAreaPatch();
-        if (!_firstPaintFired) {
-          _firstPaintFired = true;
-          try {
-            widget.onFirstPaint?.call();
-          } catch (_) {}
-        }
+        _scheduleFirstPaint();
       },
       onWebResourceError: (err) {
         if (err.isForMainFrame != true) return;
@@ -148,13 +155,35 @@ class _BrowserShellState extends State<BrowserShell>
             scheme == 'data' ||
             scheme == 'blob';
         if (inApp) {
-          if (req.isMainFrame) _lastMainFrame = req.url;
+          if (req.isMainFrame) {
+            _lastMainFrame = req.url;
+            // Main-frame navigation in flight → another redirect is likely
+            // coming. Cancel any pending first-paint we had scheduled.
+            _firstPaintDebouncer?.cancel();
+          }
           return NavigationDecision.navigate;
         }
         _launchExternal(uri);
         return NavigationDecision.prevent;
       },
     );
+  }
+
+  // Schedules a first-paint notification that fires only after the WebView
+  // has been quiet (no further onPageStarted / main-frame navigation) for
+  // [_firstPaintQuietPeriod]. This collapses redirect chains down to a
+  // single signal — the splash hand-off then matches the moment the actual
+  // landing page is on screen instead of an intermediate blank redirect.
+  void _scheduleFirstPaint() {
+    if (_firstPaintFired) return;
+    _firstPaintDebouncer?.cancel();
+    _firstPaintDebouncer = Timer(_firstPaintQuietPeriod, () {
+      if (!mounted || _firstPaintFired) return;
+      _firstPaintFired = true;
+      try {
+        widget.onFirstPaint?.call();
+      } catch (_) {}
+    });
   }
 
   void _attachPlatform() {
@@ -465,6 +494,7 @@ class _BrowserShellState extends State<BrowserShell>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _connSub?.cancel();
+    _firstPaintDebouncer?.cancel();
     widget.pulse.onPushDestination = null;
     SystemChrome.setEnabledSystemUIMode(
       SystemUiMode.manual,
