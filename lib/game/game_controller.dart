@@ -126,6 +126,11 @@ class GameController extends ChangeNotifier {
       if (_groundedTime >= _maxGroundedSeconds) {
         _lock();
         anyStep = true;
+        // _lock() → _spawn() may flip status to gameOver, but neither call
+        // notifies listeners on its own. Without this, the UI freezes on the
+        // last placed piece because the GameOverOverlay never gets a rebuild
+        // signal (only the soft/hard drop paths notify directly).
+        notifyListeners();
       }
     } else {
       _groundedTime = 0.0;
@@ -152,6 +157,7 @@ class GameController extends ChangeNotifier {
       status = GameStatus.gameOver;
       _stopLoop();
       _saveBestIfNeeded();
+      notifyListeners();
     }
   }
 
