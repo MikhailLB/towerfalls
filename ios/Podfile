@@ -36,6 +36,15 @@ target 'Runner' do
   end
 end
 
+# Notification Service Extension — needed so iOS can render image attachments
+# from FCM pushes when the Dart isolate isn't running (background / killed).
+# Pulls in FirebaseMessaging so the extension can call
+# `Messaging.serviceExtension().populateNotificationContent(...)`.
+target 'NotificationService' do
+  use_frameworks!
+  pod 'Firebase/Messaging'
+end
+
 post_install do |installer|
   installer.pods_project.targets.each do |target|
     flutter_additional_ios_build_settings(target)
