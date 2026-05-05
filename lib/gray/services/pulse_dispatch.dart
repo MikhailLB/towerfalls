@@ -18,6 +18,31 @@ Future<void> _pulseBackgroundHandler(RemoteMessage _) async {
   // notification on its own and we read [data.url] when the user taps it.
 }
 
+/// Top-level entry-point invoked by `flutter_local_notifications` when the
+/// user taps a locally-shown notification while the Dart isolate is not
+/// alive (cold start / background). Without this the rich (image-attached)
+/// notification we surface in [_onForeground] silently swallowed taps —
+/// the URL embedded in its payload was never routed to [_dispatchUrl] and
+/// the gateway WebView would not open. The handler stashes the URL into
+/// shared prefs via a dedicated short-lived [RuntimeCache]; the live
+/// instance picks it up through `consumeOneShotPush()` on next entry.
+@pragma('vm:entry-point')
+void pulseTrayBackgroundTapHandler(NotificationResponse resp) {
+  final payload = resp.payload;
+  if (payload == null || payload.isEmpty) return;
+  try {
+    final decoded = jsonDecode(payload);
+    if (decoded is Map && decoded['url'] is String) {
+      final url = decoded['url'] as String;
+      if (url.isEmpty) return;
+      // Fire-and-forget: a background isolate cannot share the foreground
+      // RuntimeCache instance, so we open a fresh one just for the stash
+      // write. The foreground app reads it back via the same prefs key.
+      RuntimeCache().stashOneShotPush(url);
+    }
+  } catch (_) {}
+}
+
 /// FCM + flutter_local_notifications wrapper. Initialises gracefully when
 /// `google-services.json` (or its iOS equivalent) is missing — in that case
 /// `bootstrap` swallows the error and [askConsent] short-circuits to false.
@@ -52,13 +77,19 @@ class PulseDispatch {
       FirebaseMessaging.onBackgroundMessage(_pulseBackgroundHandler);
       await _setupTray();
 
-      // Set foreground presentation options unconditionally (matches GR). The
-      // call is a no-op on Android.
+      // iOS foreground presentation: keep all flags OFF. Without a Notification
+      // Service Extension iOS cannot render the FCM image, so we always rely
+      // on our own flutter_local_notifications copy (built in _onForeground)
+      // to display the rich notification with the attached image. Letting the
+      // system also display the FCM payload here produced a visible duplicate
+      // — one plain "system" notification and one rich "local" notification
+      // for the exact same push, with the rich one tapping into a path that
+      // didn't always route the URL. This call is a no-op on Android.
       try {
         await _messaging!.setForegroundNotificationPresentationOptions(
-          alert: true,
-          badge: true,
-          sound: true,
+          alert: false,
+          badge: false,
+          sound: false,
         );
       } catch (err) {
         debugPrint('[PULSE] foreground options skipped: $err');
@@ -206,6 +237,11 @@ class PulseDispatch {
           }
         } catch (_) {}
       },
+      // Top-level handler for taps on locally-shown notifications when the
+      // Dart isolate isn't attached (cold start / background resume on iOS).
+      // Without this, taps on the rich (image) notification we surface in
+      // _onForeground silently dropped the URL.
+      onDidReceiveBackgroundNotificationResponse: pulseTrayBackgroundTapHandler,
     );
 
     if (Platform.isAndroid) {
