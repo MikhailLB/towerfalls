@@ -48,14 +48,24 @@ class LoadingScreen extends StatefulWidget {
 }
 
 class _LoadingScreenState extends State<LoadingScreen>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   // Hard ceiling we wait for [contentReady]. If the underlay never signals
   // (e.g. WebView crashed silently) the splash still hands over so the user
   // is not stuck on a loading bar forever.
   static const Duration _contentReadyDeadline = Duration(seconds: 12);
 
+  // The bar can only reach this much on its own; the remaining sliver is
+  // unlocked when contentReady fires so progress visually matches reality.
+  static const double _bulkCeiling = 0.95;
+  static const Duration _tailDuration = Duration(milliseconds: 380);
+
   VideoPlayerController? _video;
-  late final AnimationController _progress;
+  // Bulk phase: paces the bar from 0 to [_bulkCeiling] over
+  // kLoadingMinDuration. Continues running independently of contentReady.
+  late final AnimationController _bulk;
+  // Tail phase: sprints from [_bulkCeiling] to 1.0 once both bulk has
+  // reached the ceiling AND contentReady has fired.
+  late final AnimationController _tail;
   Orientation? _loadedOrientation;
   bool _loadingVideo = false;
   bool _videoFailed = false;
@@ -69,6 +79,9 @@ class _LoadingScreenState extends State<LoadingScreen>
   bool _useUnderlay = false;
   bool? _keepDecision;
 
+  double get _displayedProgress =>
+      _tail.value > _bulk.value ? _tail.value : _bulk.value;
+
   @override
   void initState() {
     super.initState();
@@ -77,10 +90,26 @@ class _LoadingScreenState extends State<LoadingScreen>
       DeviceOrientation.landscapeLeft,
       DeviceOrientation.landscapeRight,
     ]);
-    _progress = AnimationController(
+    _bulk = AnimationController(
       vsync: this,
       duration: kLoadingMinDuration,
+      lowerBound: 0.0,
+      upperBound: _bulkCeiling,
     )
+      ..addListener(() {
+        if (mounted) setState(() {});
+      })
+      ..addStatusListener((status) {
+        if (status == AnimationStatus.completed) _maybeStartTail();
+      });
+
+    _tail = AnimationController(
+      vsync: this,
+      duration: _tailDuration,
+      lowerBound: _bulkCeiling,
+      upperBound: 1.0,
+    )
+      ..value = _bulkCeiling
       ..addListener(() {
         if (mounted) setState(() {});
       })
@@ -129,14 +158,25 @@ class _LoadingScreenState extends State<LoadingScreen>
       }).then((_) {
         if (!mounted) return;
         setState(() => _contentReady = true);
-        _maybeGoNext();
+        _maybeStartTail();
       }).catchError((err) {
         debugPrint('[LoadingScreen] contentReady error: $err');
         if (!mounted) return;
         setState(() => _contentReady = true);
-        _maybeGoNext();
+        _maybeStartTail();
       });
     }
+  }
+
+  void _maybeStartTail() {
+    if (_tail.status != AnimationStatus.dismissed &&
+        _tail.value > _bulkCeiling) {
+      // Already running / completed.
+      return;
+    }
+    if (_bulk.status != AnimationStatus.completed) return;
+    if (!_contentReady) return;
+    _tail.forward();
   }
 
   @override
@@ -151,7 +191,7 @@ class _LoadingScreenState extends State<LoadingScreen>
   void _startProgressIfNeeded() {
     if (_progressStarted) return;
     _progressStarted = true;
-    _progress.forward();
+    _bulk.forward();
   }
 
   Future<void> _loadVideo(Orientation orientation) async {
@@ -195,7 +235,7 @@ class _LoadingScreenState extends State<LoadingScreen>
 
   void _maybeGoNext() {
     if (_navigated) return;
-    if (_progress.status != AnimationStatus.completed) return;
+    if (_tail.status != AnimationStatus.completed) return;
     if (!_routeReady) return;
     if (!_contentReady) return;
     _goNext();
@@ -242,7 +282,10 @@ class _LoadingScreenState extends State<LoadingScreen>
     final video = _video;
     _video = null;
     try {
-      _progress.stop();
+      _bulk.stop();
+    } catch (_) {}
+    try {
+      _tail.stop();
     } catch (_) {}
     try {
       await video?.pause();
@@ -256,7 +299,8 @@ class _LoadingScreenState extends State<LoadingScreen>
   @override
   void dispose() {
     _video?.dispose();
-    _progress.dispose();
+    _bulk.dispose();
+    _tail.dispose();
     super.dispose();
   }
 
@@ -311,10 +355,10 @@ class _LoadingScreenState extends State<LoadingScreen>
                 constraints: BoxConstraints(
                   maxHeight: landscape ? 70 : 96,
                 ),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  child: LoadingBar(progress: _progress.value),
-                ),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: LoadingBar(progress: _displayedProgress),
+                  ),
               ),
             ),
           ),
