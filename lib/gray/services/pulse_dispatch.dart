@@ -442,6 +442,11 @@ class PulseDispatch {
             await tmp.writeAsBytes(bytes);
             iosDetails = DarwinNotificationDetails(
               attachments: [DarwinNotificationAttachment(tmp.path)],
+              presentAlert: true,
+              presentBadge: true,
+              presentSound: true,
+              presentBanner: true,
+              presentList: true,
             );
           } catch (e) {
             debugPrint('[PULSE] iOS attachment failed: $e');
@@ -457,7 +462,19 @@ class PulseDispatch {
       priority: Priority.high,
       icon: pulseIconRes,
     );
-    iosDetails ??= const DarwinNotificationDetails();
+    // presentAlert / presentBanner default to FALSE in flutter_local_notifications
+    // — without them iOS silently appends the local notification to the
+    // notification center while the app is in foreground (no banner). After the
+    // user backgrounds the app and taps it from notification center, iOS routes
+    // the tap into the background isolate handler instead of the live one, which
+    // breaks the in-app navigation we wire through onPushDestination.
+    iosDetails ??= const DarwinNotificationDetails(
+      presentAlert: true,
+      presentBadge: true,
+      presentSound: true,
+      presentBanner: true,
+      presentList: true,
+    );
 
     final payload =
         message.data.isNotEmpty ? jsonEncode(message.data) : null;
