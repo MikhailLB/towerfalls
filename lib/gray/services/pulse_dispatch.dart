@@ -77,19 +77,18 @@ class PulseDispatch {
       FirebaseMessaging.onBackgroundMessage(_pulseBackgroundHandler);
       await _setupTray();
 
-      // iOS foreground presentation: keep all flags OFF. Without a Notification
-      // Service Extension iOS cannot render the FCM image, so we always rely
-      // on our own flutter_local_notifications copy (built in _onForeground)
-      // to display the rich notification with the attached image. Letting the
-      // system also display the FCM payload here produced a visible duplicate
-      // — one plain "system" notification and one rich "local" notification
-      // for the exact same push, with the rich one tapping into a path that
-      // didn't always route the URL. This call is a no-op on Android.
+      // iOS foreground presentation: ON. With the Notification Service
+      // Extension in place iOS already renders the rich (image-attached)
+      // notification by itself, regardless of foreground/background. Letting
+      // the system show the push in foreground avoids the previous duplicate
+      // (system + flutter_local_notifications) and avoids a Firebase delegate
+      // quirk where setting alert=false also suppressed our locally-scheduled
+      // notifications. No-op on Android.
       try {
         await _messaging!.setForegroundNotificationPresentationOptions(
-          alert: false,
-          badge: false,
-          sound: false,
+          alert: true,
+          badge: true,
+          sound: true,
         );
       } catch (err) {
         debugPrint('[PULSE] foreground options skipped: $err');
@@ -403,6 +402,19 @@ class PulseDispatch {
       if (url != null && url.isNotEmpty) {
         _dispatchUrl(url, source: 'fg-data-only');
       }
+      return;
+    }
+
+    // On iOS the system already presents the FCM notification in foreground
+    // (alert/badge/sound are enabled in bootstrap) and the Notification
+    // Service Extension attaches the image before display — there is no need
+    // to render an additional flutter_local_notifications copy. Doing so used
+    // to produce a duplicate banner and broke tap routing because Firebase's
+    // swizzled UNUserNotificationCenter delegate intercepts taps on locally-
+    // scheduled notifications differently from FCM-displayed ones. The system
+    // tap path goes through onMessageOpenedApp, which BrowserShell already
+    // subscribes to and routes to the live WebView via _wv.loadRequest(...).
+    if (Platform.isIOS) {
       return;
     }
 
