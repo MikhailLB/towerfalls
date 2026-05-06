@@ -33,7 +33,7 @@ class RemoteGateClient {
             headers: const {'Content-Type': 'application/json'},
             body: jsonEncode(body),
           )
-          .timeout(const Duration(seconds: 18));
+          .timeout(const Duration(seconds: 8));
 
       debugPrint('[TF.RGC] HTTP ${response.statusCode}'
           ' contentLen=${response.contentLength ?? response.body.length}');

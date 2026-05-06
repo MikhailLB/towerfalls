@@ -50,11 +50,6 @@ abstract final class RuntimeBrand {
       ? unmask(_firebaseProjectIos)
       : unmask(_firebaseProjectAndroid);
 
-  /// Debug-only: forces the attribution layer to report Non-organic so the
-  /// gray boot flow can be exercised on dev/TestFlight builds without a real
-  /// paid-install link. MUST be `false` before shipping to production.
-  static const bool debugForceNonOrganic = true;
-
   static String get configUrl => gateEndpoint();
   static String get chromeBuild => webChromeVersion();
   static String get safariBuild => webSafariVersion();

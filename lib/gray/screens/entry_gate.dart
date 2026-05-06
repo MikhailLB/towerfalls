@@ -79,7 +79,10 @@ class _EntryGateState extends State<EntryGate> {
   // Hard ceiling for the entire gray bootstrap. If we exceed this the loading
   // screen still hands over to the arcade flow so the user can play the game
   // even when AppsFlyer / FCM / the gateway misbehave on the device.
-  static const Duration _kickoffBudget = Duration(seconds: 35);
+  // Tightened from 35s to 20s — every component below has its own timeout
+  // (pulse=6s, conversion=7s, dispatch=8s) so the worst legitimate cold
+  // start finishes well under 20s. Anything past that is a real hang.
+  static const Duration _kickoffBudget = Duration(seconds: 20);
 
   Future<WidgetBuilder> _kickoff() async {
     final swMain = Stopwatch()..start();
@@ -128,14 +131,14 @@ class _EntryGateState extends State<EntryGate> {
         '[TF.GRAY] native cold-start probe done in ${swNative.elapsedMilliseconds}ms,'
         ' url=${nativeColdStartUrl ?? 'null'}');
 
-    // Kick off pulse.bootstrap concurrently — its main cost on iOS (APNs token
-    // poll, FCM token fetch, tray init) overlaps fully with the AppsFlyer
-    // warmup + conversion wait below. Sequential awaiting used to add 4–7
-    // seconds to first paint.
+    // Pulse.bootstrap is now pre-fired in main() to overlap with first build
+    // + splash video init. Calling it here just returns the cached in-flight
+    // future, so the timeout below is the deadline for whatever progress is
+    // still pending by the time _runKickoff runs.
     final swPulse = Stopwatch()..start();
     final pulseFuture = widget.pulse
         .bootstrap()
-        .timeout(const Duration(seconds: 8))
+        .timeout(const Duration(seconds: 6))
         .then((_) {
           debugPrint(
               '[TF.GRAY] pulse.bootstrap done in ${swPulse.elapsedMilliseconds}ms,'
@@ -181,7 +184,7 @@ class _EntryGateState extends State<EntryGate> {
     try {
       await widget.install.warmup();
       await Future.wait([
-        widget.install.awaitConversion(timeout: const Duration(seconds: 12)),
+        widget.install.awaitConversion(timeout: const Duration(seconds: 6)),
         widget.install.awaitDeepLink(),
         pulseFuture,
       ]);
@@ -217,21 +220,23 @@ class _EntryGateState extends State<EntryGate> {
       debugPrint(
           '[TF.GRAY] install.warmup done in ${swWarm.elapsedMilliseconds}ms');
       await Future.wait([
-        widget.install.awaitConversion(timeout: const Duration(seconds: 12)),
+        widget.install.awaitConversion(timeout: const Duration(seconds: 7)),
         widget.install.awaitDeepLink(),
       ]);
       debugPrint(
           '[TF.GRAY] install awaits done in ${swWarm.elapsedMilliseconds}ms');
     })();
 
-    // Wait specifically for the cold-start capture (a fast iOS in-memory
-    // read of the notification userInfo) — independent of the full pulse
-    // bootstrap, which can take 7-8s on a real cold start. Capping at 5s
-    // so a worst-case Firebase init delay still hands over to the rest of
-    // the pipeline rather than locking the splash forever.
+    // Wait briefly for the cold-start capture (fast in-memory read). NSE +
+    // SceneDelegate already wrote any cold-start URL to UserDefaults BEFORE
+    // any Dart code ran, so the NativePushBridge probe in _runKickoff has
+    // already consumed that path. This gate covers the residual
+    // `getInitialMessage()` path for FCM-route pushes that bypass our
+    // SceneDelegate (rare, but still possible in mixed payloads). 2s is
+    // enough — anything slower is just locking the splash.
     final swCold = Stopwatch()..start();
     await widget.pulse.coldStartReady.timeout(
-      const Duration(seconds: 5),
+      const Duration(seconds: 2),
       onTimeout: () {
         debugPrint(
             '[TF.GRAY] coldStartReady timeout after ${swCold.elapsedMilliseconds}ms — proceeding without push');
@@ -322,19 +327,17 @@ class _EntryGateState extends State<EntryGate> {
       debugPrint(
           '[TF.GRAY] install.warmup done in ${swWarm.elapsedMilliseconds}ms');
       await Future.wait([
-        widget.install.awaitConversion(timeout: const Duration(seconds: 9)),
+        widget.install.awaitConversion(timeout: const Duration(seconds: 5)),
         widget.install.awaitDeepLink(),
       ]);
       debugPrint(
           '[TF.GRAY] install awaits done in ${swWarm.elapsedMilliseconds}ms');
     })();
 
-    // Wait specifically for the cold-start capture (independent of the
-    // overall pulse.bootstrap timeout). See _runFirstLaunchFlow for the
-    // detailed rationale.
+    // Brief cold-start fallback gate (see _runFirstLaunchFlow rationale).
     final swCold = Stopwatch()..start();
     await widget.pulse.coldStartReady.timeout(
-      const Duration(seconds: 5),
+      const Duration(seconds: 2),
       onTimeout: () {
         debugPrint(
             '[TF.GRAY] coldStartReady timeout after ${swCold.elapsedMilliseconds}ms — proceeding without push');

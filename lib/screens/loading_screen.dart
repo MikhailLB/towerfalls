@@ -51,8 +51,10 @@ class _LoadingScreenState extends State<LoadingScreen>
     with SingleTickerProviderStateMixin {
   // Hard ceiling we wait for [contentReady]. If the underlay never signals
   // (e.g. WebView crashed silently) the splash still hands over so the user
-  // is not stuck on a loading bar forever.
-  static const Duration _contentReadyDeadline = Duration(seconds: 12);
+  // is not stuck on a loading bar forever. Tightened from 12s → 6s — a
+  // healthy WebView paints inside 2-3s and the worst-case fallback to the
+  // arcade flow is fine when something has actually broken.
+  static const Duration _contentReadyDeadline = Duration(seconds: 6);
 
   VideoPlayerController? _video;
   late final AnimationController _progress;

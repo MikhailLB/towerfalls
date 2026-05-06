@@ -23,7 +23,7 @@ const String kEmptyBarAsset = 'assets/loading/empty_bar.webp';
 const String kAlmostBarAsset = 'assets/loading/almost_bar.webp';
 const String kFullBarAsset = 'assets/loading/full_bar.webp';
 
-const Duration kLoadingMinDuration = Duration(milliseconds: 3200);
+const Duration kLoadingMinDuration = Duration(milliseconds: 2200);
 
 const String kBestScoreKey = 'tower_falls.best_score';
 

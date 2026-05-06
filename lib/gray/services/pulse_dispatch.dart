@@ -56,6 +56,12 @@ class PulseDispatch {
   String? _token;
   bool _ready = false;
   Future<bool>? _consentInFlight;
+  // Cached bootstrap future so main() can pre-fire bootstrap and EntryGate
+  // can await the same in-flight future a moment later — overlapping the
+  // expensive work (APNs token poll, FCM token fetch, getInitialMessage
+  // round-trip) with the first frame render and splash video init instead
+  // of starting it AFTER everything else.
+  Future<void>? _bootstrapFuture;
 
   void Function(String url)? onPushDestination;
   void Function(String token)? onTokenRotated;
@@ -74,7 +80,11 @@ class PulseDispatch {
   /// dropped to a bootstrap timeout race.
   Future<void> get coldStartReady => _coldStartGate.future;
 
-  Future<void> bootstrap() async {
+  Future<void> bootstrap() {
+    return _bootstrapFuture ??= _doBootstrap();
+  }
+
+  Future<void> _doBootstrap() async {
     if (_ready) return;
     try {
       // Firebase.initializeApp() is already called in main.dart#_bootFirebase

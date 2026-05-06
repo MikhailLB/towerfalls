@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:firebase_app_check/firebase_app_check.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart';
@@ -47,23 +49,41 @@ Future<void> _applyChrome() async {
 }
 
 Future<void> main() async {
+  final swMain = Stopwatch()..start();
   WidgetsFlutterBinding.ensureInitialized();
 
-  await _applyChrome();
-  await _bootFirebase();
-  await secureHttp.warmup();
-
+  // Run independent initialization in parallel. Firebase init dominates this
+  // phase (~700-1500ms), but secureHttp.warmup (DeviceInfo lookup) and
+  // cache.bootstrap (SharedPreferences open) used to be awaited sequentially
+  // afterwards even though they don't depend on Firebase at all. Running
+  // them concurrently saves ~250-400ms before runApp.
+  unawaited(_applyChrome());
+  final firebaseFuture = _bootFirebase();
+  final httpFuture = secureHttp.warmup();
   final cache = RuntimeCache();
-  try {
-    await cache.bootstrap();
-  } catch (err) {
+  final cacheFuture = cache.bootstrap().catchError((err) {
     debugPrint('[TF.GRAY] RuntimeCache failed: $err');
-  }
+  });
+
+  await firebaseFuture;
+  debugPrint('[TF.GRAY] firebase ready in ${swMain.elapsedMilliseconds}ms');
+  await Future.wait([httpFuture, cacheFuture]);
+  debugPrint('[TF.GRAY] http+cache ready in ${swMain.elapsedMilliseconds}ms');
 
   final radar = NetworkRadar();
   final install = InstallSignalClient();
   final gate = RemoteGateClient(cache);
   final pulse = PulseDispatch(cache);
+
+  // PRE-FIRE pulse.bootstrap so its expensive network work (APNs token poll,
+  // FCM token fetch, getInitialMessage round-trip — used to add 4-7s to
+  // first paint when started lazily inside EntryGate) overlaps with the
+  // first frame, splash video init, and EntryGate.initState. The future is
+  // cached inside PulseDispatch so EntryGate's `await widget.pulse.bootstrap()`
+  // returns the same in-flight handle instead of starting a second copy.
+  unawaited(pulse.bootstrap().catchError((err) {
+    debugPrint('[TF.GRAY] pulse pre-fire failed: $err');
+  }));
 
   debugPrint('[TF.GRAY] runtime brand:'
       ' gateEnabled=${RuntimeBrand.gateEnabled}'
@@ -71,7 +91,8 @@ Future<void> main() async {
       ' devKeyLen=${RuntimeBrand.installDevKey.length}'
       ' fbProj=${RuntimeBrand.firebaseProjectNumber}'
       ' iosAppId=${RuntimeBrand.iosAppId}'
-      ' bundle=${RuntimeBrand.packageName}');
+      ' bundle=${RuntimeBrand.packageName}'
+      ' bootMs=${swMain.elapsedMilliseconds}');
 
   runApp(TowerFallsApp(
     cache: cache,

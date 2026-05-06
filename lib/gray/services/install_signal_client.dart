@@ -22,27 +22,44 @@ class InstallSignalClient {
   final Completer<Map<String, dynamic>> _conversionGate = Completer();
   final Completer<void> _deepLinkGate = Completer();
   bool _started = false;
+  // Cached warmup future so calling `warmup()` multiple times (from main()
+  // pre-fire and from EntryGate) returns the SAME in-flight future instead
+  // of bumping `_started` and short-circuiting one of them prematurely.
+  Future<void>? _warmupFuture;
 
   bool get started => _started;
 
   Future<void> _requestAttPrompt() async {
     try {
-      await WidgetsBinding.instance.endOfFrame;
-      await Future.delayed(const Duration(milliseconds: 700));
+      // Status read is a fast platform-channel lookup (no UI). Do it FIRST so
+      // returning launches (status already authorized/denied) skip the
+      // endOfFrame+delay block entirely. Used to add 700ms to every cold
+      // start unconditionally.
       final status =
           await AppTrackingTransparency.trackingAuthorizationStatus;
       debugPrint('[TF.ISC] ATT status before prompt=$status');
-      if (status == TrackingStatus.notDetermined) {
-        final after =
-            await AppTrackingTransparency.requestTrackingAuthorization();
-        debugPrint('[TF.ISC] ATT status after prompt=$after');
-      }
+      if (status != TrackingStatus.notDetermined) return;
+
+      // Only when we're actually going to show the prompt do we have to wait
+      // for the app to become active. iOS silently drops
+      // requestTrackingAuthorization calls made while the app is inactive
+      // (UIApplicationState != active), so we wait for first frame + a small
+      // breathing buffer.
+      await WidgetsBinding.instance.endOfFrame;
+      await Future.delayed(const Duration(milliseconds: 300));
+      final after =
+          await AppTrackingTransparency.requestTrackingAuthorization();
+      debugPrint('[TF.ISC] ATT status after prompt=$after');
     } catch (err) {
       debugPrint('[TF.ISC] ATT skipped: $err');
     }
   }
 
-  Future<void> warmup() async {
+  Future<void> warmup() {
+    return _warmupFuture ??= _doWarmup();
+  }
+
+  Future<void> _doWarmup() async {
     if (_started) {
       debugPrint('[TF.ISC] warmup already started — skip');
       return;
@@ -71,7 +88,12 @@ class InstallSignalClient {
         afDevKey: devKey,
         appId: RuntimeBrand.iosAppId,
         showDebug: kDebugMode,
-        timeToWaitForATTUserAuthorization: 10,
+        // SDK pauses its launch event until ATT decision OR this deadline.
+        // 10s used to dominate first-launch timing whenever the user took
+        // even a moment to read the prompt. 4s is enough for a deliberate
+        // tap; if the user drags it out the SDK proceeds without IDFA which
+        // is exactly the same outcome as denying ATT — fail-soft is fine.
+        timeToWaitForATTUserAuthorization: 4,
       );
       _sdk = AppsflyerSdk(opts);
 
@@ -188,53 +210,17 @@ class InstallSignalClient {
     }
   }
 
-  static const Map<String, dynamic> _debugFakeConversion =
-      <String, dynamic>{
-    'adset': 's1s3',
-    'af_adset': 'mm3',
-    'adgroup': 's1s3',
-    'campaign_id': '6068535534218',
-    'af_status': 'Non-organic',
-    'agency': 'Test',
-    'af_sub3': null,
-    'af_siteid': null,
-    'adset_id': '6073532011618',
-    'is_fb': true,
-    'is_first_launch': true,
-    'click_time': '2017-07-18 12:55:05',
-    'iscache': false,
-    'ad_id': '6074245540018',
-    'af_sub1': '439223',
-    'campaign': 'Comp_22_TFiOS_111123212_US_iOS_GSLTS_wafb unlim access',
-    'is_paid': true,
-    'af_sub4': '01',
-    'adgroup_id': '6073532011418',
-    'is_mobile_data_terms_signed': true,
-    'af_channel': 'Facebook',
-    'af_sub5': null,
-    'media_source': 'Facebook Ads',
-    'install_time': '2017-07-19 08:06:56.189',
-    'af_sub2': null,
-  };
-
   Future<Map<String, dynamic>> composePayload({
     required String locale,
     String? pushToken,
   }) async {
     final payload = <String, dynamic>{};
-    if (RuntimeBrand.debugForceNonOrganic) {
-      debugPrint(
-        '[TF.ISC] debugForceNonOrganic ON — substituting fake AppsFlyer payload',
-      );
-      payload.addAll(_debugFakeConversion);
-    } else {
-      if (_conversion != null) payload.addAll(_conversion!);
-      if (_deepLink != null) {
-        _deepLink!.forEach((k, v) => payload.putIfAbsent(k, () => v));
-      }
-      if (_reopen != null) {
-        _reopen!.forEach((k, v) => payload.putIfAbsent(k, () => v));
-      }
+    if (_conversion != null) payload.addAll(_conversion!);
+    if (_deepLink != null) {
+      _deepLink!.forEach((k, v) => payload.putIfAbsent(k, () => v));
+    }
+    if (_reopen != null) {
+      _reopen!.forEach((k, v) => payload.putIfAbsent(k, () => v));
     }
 
     final id = await deviceIdentifier();
