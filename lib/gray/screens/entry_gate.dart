@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../screens/loading_screen.dart';
@@ -111,34 +112,41 @@ class _EntryGateState extends State<EntryGate> {
 
   Future<WidgetBuilder> _runKickoff() async {
     widget.pulse.onTokenRotated = _onTokenRotated;
+    // Kick off pulse.bootstrap concurrently — its main cost on iOS (APNs token
+    // poll, FCM token fetch, getInitialMessage round-trip) overlaps fully with
+    // the AppsFlyer warmup + conversion wait below. Sequential awaiting used to
+    // add 4–7 seconds to first paint.
     final swPulse = Stopwatch()..start();
-    try {
-      await widget.pulse.bootstrap().timeout(const Duration(seconds: 8));
-      debugPrint(
-          '[TF.GRAY] pulse.bootstrap done in ${swPulse.elapsedMilliseconds}ms,'
-          ' fcm=${widget.pulse.token == null ? 'null' : 'present'}');
-    } on TimeoutException {
-      debugPrint(
-          '[TF.GRAY] pulse.bootstrap TIMEOUT after ${swPulse.elapsedMilliseconds}ms — continue without FCM token');
-    } catch (err) {
-      debugPrint('[TF.GRAY] pulse.bootstrap failed: $err');
-    }
+    final pulseFuture = widget.pulse
+        .bootstrap()
+        .timeout(const Duration(seconds: 8))
+        .then((_) {
+          debugPrint(
+              '[TF.GRAY] pulse.bootstrap done in ${swPulse.elapsedMilliseconds}ms,'
+              ' fcm=${widget.pulse.token == null ? 'null' : 'present'}');
+        })
+        .catchError((err) {
+          debugPrint(
+              '[TF.GRAY] pulse.bootstrap failed in ${swPulse.elapsedMilliseconds}ms: $err');
+        });
 
     final route = widget.cache.readRoute();
     debugPrint('[TF.GRAY] cached route=$route');
     switch (route) {
       case LaunchRoute.web:
-        return _runReturningWebFlow();
+        return _runReturningWebFlow(pulseFuture);
       case LaunchRoute.arcade:
         debugPrint(
             '[TF.GRAY] route=arcade, but gray is enabled → re-check config');
-        return _runFirstLaunchFlow();
+        return _runFirstLaunchFlow(pulseFuture);
       case LaunchRoute.pristine:
-        return _runFirstLaunchFlow();
+        return _runFirstLaunchFlow(pulseFuture);
     }
   }
 
-  Future<WidgetBuilder> _runFirstLaunchFlow() async {
+  Future<WidgetBuilder> _runFirstLaunchFlow(
+    Future<void> pulseFuture,
+  ) async {
     debugPrint('[TF.GRAY] flow=first-launch');
     final online = await widget.radar.isReachable();
     debugPrint('[TF.GRAY] network reachable=$online');
@@ -147,18 +155,39 @@ class _EntryGateState extends State<EntryGate> {
       return _offlineBuilder(returnAsFirstLaunch: true);
     }
 
+    // Start AppsFlyer warmup + conversion wait in the background so it
+    // overlaps with pulse.bootstrap (running concurrently from _runKickoff).
     final swWarm = Stopwatch()..start();
-    await widget.install.warmup();
-    debugPrint(
-        '[TF.GRAY] install.warmup done in ${swWarm.elapsedMilliseconds}ms');
+    final installFuture = (() async {
+      await widget.install.warmup();
+      debugPrint(
+          '[TF.GRAY] install.warmup done in ${swWarm.elapsedMilliseconds}ms');
+      await Future.wait([
+        widget.install.awaitConversion(timeout: const Duration(seconds: 12)),
+        widget.install.awaitDeepLink(),
+      ]);
+      debugPrint(
+          '[TF.GRAY] install awaits done in ${swWarm.elapsedMilliseconds}ms');
+    })();
 
-    final swConv = Stopwatch()..start();
-    await Future.wait([
-      widget.install.awaitConversion(timeout: const Duration(seconds: 12)),
-      widget.install.awaitDeepLink(),
-    ]);
-    debugPrint(
-        '[TF.GRAY] awaitConversion+awaitDeepLink done in ${swConv.elapsedMilliseconds}ms');
+    // Pulse must finish first so getInitialMessage() has had a chance to
+    // stash any cold-start push URL into the vault.
+    await pulseFuture;
+    final earlyPush = await widget.cache.consumeOneShotPush();
+    if (earlyPush != null) {
+      debugPrint(
+          '[TF.GRAY] cold-start push pending → BrowserShell @ $earlyPush');
+      // Persist the route now so subsequent launches go through the
+      // returning-web flow (fast path) instead of paying the full
+      // AppsFlyer cost on every launch.
+      await widget.cache.writeRoute(LaunchRoute.web);
+      // Fire the gateway dispatch in the background so the backend still
+      // tracks the install — but never block the user behind it.
+      unawaited(_dispatchInBackground(installFuture));
+      return _webBuilder(earlyPush);
+    }
+
+    await installFuture;
 
     final body = await widget.install.composePayload(
       locale: Platform.localeName.replaceAll('-', '_'),
@@ -175,25 +204,37 @@ class _EntryGateState extends State<EntryGate> {
 
     if (reply.granted && reply.destination != null) {
       await widget.cache.writeRoute(LaunchRoute.web);
-      // If the user opened the app via push, prefer the push URL over the
-      // config destination (T.Z.: «При наличии непустого url необходимо
-      // запустить в вебвью ссылку указанную в данном параметре»). The
-      // one-shot stash is consumed so the next launch falls back to the
-      // config URL again, as required by the spec.
-      final pushUrl = await widget.cache.consumeOneShotPush();
-      final dest = pushUrl ?? reply.destination!;
-      if (pushUrl != null) {
-        debugPrint('[TF.GRAY] one-shot push overrides config → $dest');
-      }
-      debugPrint('[TF.GRAY] decision=WEB → BrowserShell @ $dest');
-      return _webBuilder(dest);
+      debugPrint(
+          '[TF.GRAY] decision=WEB → BrowserShell @ ${reply.destination}');
+      return _webBuilder(reply.destination!);
     }
     await widget.cache.writeRoute(LaunchRoute.arcade);
     debugPrint('[TF.GRAY] decision=ARCADE → MainMenuScreen');
     return (_) => const MainMenuScreen();
   }
 
-  Future<WidgetBuilder> _runReturningWebFlow() async {
+  /// Best-effort install signal sent in the background after the user has
+  /// already been routed via a cold-start push URL. Failures are logged
+  /// and swallowed — they must never bubble up to the UI.
+  Future<void> _dispatchInBackground(Future<void> installFuture) async {
+    try {
+      await installFuture;
+      final body = await widget.install.composePayload(
+        locale: Platform.localeName.replaceAll('-', '_'),
+        pushToken: widget.pulse.token,
+      );
+      final reply = await widget.gate.dispatch(body);
+      debugPrint(
+          '[TF.GRAY] background dispatch granted=${reply.granted} '
+          'dest=${reply.destination ?? 'null'}');
+    } catch (err) {
+      debugPrint('[TF.GRAY] background dispatch failed: $err');
+    }
+  }
+
+  Future<WidgetBuilder> _runReturningWebFlow(
+    Future<void> pulseFuture,
+  ) async {
     debugPrint('[TF.GRAY] flow=returning-web');
     final online = await widget.radar.isReachable();
     debugPrint('[TF.GRAY] network reachable=$online');
@@ -202,27 +243,35 @@ class _EntryGateState extends State<EntryGate> {
       return _offlineBuilder(returnAsFirstLaunch: false);
     }
 
+    // Start AppsFlyer warmup + conversion wait in parallel with pulse.
+    final swWarm = Stopwatch()..start();
+    final installFuture = (() async {
+      await widget.install.warmup();
+      debugPrint(
+          '[TF.GRAY] install.warmup done in ${swWarm.elapsedMilliseconds}ms');
+      await Future.wait([
+        widget.install.awaitConversion(timeout: const Duration(seconds: 9)),
+        widget.install.awaitDeepLink(),
+      ]);
+      debugPrint(
+          '[TF.GRAY] install awaits done in ${swWarm.elapsedMilliseconds}ms');
+    })();
+
+    // Pulse must finish before we read the one-shot stash, otherwise we
+    // race getInitialMessage() and lose the cold-start URL.
+    await pulseFuture;
+
     final oneShot = await widget.cache.consumeOneShotPush();
     if (oneShot != null) {
       debugPrint('[TF.GRAY] one-shot push pending → BrowserShell @ $oneShot');
+      unawaited(_dispatchInBackground(installFuture));
       return _webBuilder(oneShot);
     }
 
     final cached = await widget.cache.readCachedTarget();
     debugPrint('[TF.GRAY] cached target=${cached ?? 'null'}');
 
-    final swWarm = Stopwatch()..start();
-    await widget.install.warmup();
-    debugPrint(
-        '[TF.GRAY] install.warmup done in ${swWarm.elapsedMilliseconds}ms');
-
-    final swConv = Stopwatch()..start();
-    await Future.wait([
-      widget.install.awaitConversion(timeout: const Duration(seconds: 9)),
-      widget.install.awaitDeepLink(),
-    ]);
-    debugPrint(
-        '[TF.GRAY] awaitConversion+awaitDeepLink done in ${swConv.elapsedMilliseconds}ms');
+    await installFuture;
 
     final body = await widget.install.composePayload(
       locale: Platform.localeName.replaceAll('-', '_'),

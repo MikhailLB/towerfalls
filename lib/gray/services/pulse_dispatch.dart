@@ -184,11 +184,14 @@ class PulseDispatch {
     }
   }
 
-  // Number of poll attempts when waiting for the iOS APNs token. Spaced ~600ms
-  // apart, which gives ~4.2s total — enough for typical TestFlight cold starts
-  // without blocking the gray flow indefinitely.
-  static const int _apnsRetries = 7;
-  static const Duration _apnsBackoff = Duration(milliseconds: 600);
+  // Number of poll attempts when waiting for the iOS APNs token. Spaced 500ms
+  // apart, giving 2.5s total — pulse.bootstrap is now run in parallel with
+  // AppsFlyer warmup so the gray flow can usually absorb the wait, but if APNs
+  // genuinely never arrives we want to fail fast rather than block the splash.
+  // The poll exits early on the first non-empty token so a healthy device
+  // pays only the actual token-arrival latency (typically <1s).
+  static const int _apnsRetries = 5;
+  static const Duration _apnsBackoff = Duration(milliseconds: 500);
 
   Future<void> _waitForApnsToken({
     int retries = _apnsRetries,
