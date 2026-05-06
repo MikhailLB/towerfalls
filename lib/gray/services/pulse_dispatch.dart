@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -50,6 +51,7 @@ class PulseDispatch {
   final FlutterLocalNotificationsPlugin _tray =
       FlutterLocalNotificationsPlugin();
   final RuntimeCache _cache;
+  final Completer<void> _coldStartGate = Completer<void>();
   FirebaseMessaging? _messaging;
   String? _token;
   bool _ready = false;
@@ -63,6 +65,15 @@ class PulseDispatch {
   String? get token => _token;
   bool get ready => _ready;
 
+  /// Resolves as soon as the iOS cold-start [getInitialMessage] round-trip has
+  /// been processed (URL, if any, persisted into the one-shot vault).
+  /// Independent of [bootstrap]'s slower work (APNs poll, FCM token fetch,
+  /// tray initialisation) — guaranteed to fire even if the outer timeout in
+  /// EntryGate kills the rest of bootstrap. EntryGate awaits this gate
+  /// before reading the one-shot stash so a killed-app push tap is never
+  /// dropped to a bootstrap timeout race.
+  Future<void> get coldStartReady => _coldStartGate.future;
+
   Future<void> bootstrap() async {
     if (_ready) return;
     try {
@@ -73,6 +84,22 @@ class PulseDispatch {
       // skipped onMessage / onMessageOpenedApp registration entirely. That was
       // exactly why notification taps never reached Dart on iOS.
       _messaging = FirebaseMessaging.instance;
+
+      // PRIORITY: capture the cold-start tap BEFORE any other async work.
+      //
+      // On iOS, when the user taps a notification while the app is killed,
+      // iOS launches the app and Firebase's swizzled UNUserNotificationCenter
+      // delegate stores the response's userInfo into an in-memory variable
+      // BEFORE any Dart code runs. `getInitialMessage()` is a simple platform-
+      // channel read of that variable — it does not depend on APNs token,
+      // FCM token, network, or local-notifications tray.
+      //
+      // Previously this call was last in bootstrap (after _setupTray, APNs
+      // poll, getToken). On a real cold start those add up to ~8s, racing the
+      // outer 8s timeout in EntryGate. When the timeout won, _onColdStart was
+      // never invoked, the one-shot stash stayed empty, and the user landed
+      // on the cached / config destination instead of the push URL.
+      await _captureColdStart();
 
       FirebaseMessaging.onBackgroundMessage(_pulseBackgroundHandler);
       await _setupTray();
@@ -94,8 +121,8 @@ class PulseDispatch {
         debugPrint('[PULSE] foreground options skipped: $err');
       }
 
-      // Attach listeners BEFORE awaiting any token / cold-start work so we
-      // never miss a foreground push that arrives during bootstrap.
+      // Attach listeners BEFORE awaiting any token work so we never miss a
+      // foreground push that arrives during bootstrap.
       _messaging!.onTokenRefresh.listen((fresh) {
         _token = fresh;
         debugPrint('[PULSE] onTokenRefresh');
@@ -114,13 +141,6 @@ class PulseDispatch {
         debugPrint('[PULSE] getToken failed: $err');
       }
 
-      try {
-        final cold = await _messaging!.getInitialMessage();
-        if (cold != null) await _onColdStart(cold);
-      } catch (err) {
-        debugPrint('[PULSE] getInitialMessage failed: $err');
-      }
-
       _ready = true;
       debugPrint(
         '[PULSE] bootstrap OK, token=${_token == null ? 'null' : '${_token!.substring(0, _token!.length.clamp(0, 12))}…'}',
@@ -128,7 +148,76 @@ class PulseDispatch {
     } catch (err, st) {
       debugPrint('[PULSE] bootstrap failed: $err');
       debugPrint('$st');
+    } finally {
+      // Belt-and-braces: make sure the cold-start gate ALWAYS resolves so
+      // EntryGate's `await coldStartReady` cannot deadlock. _captureColdStart
+      // already completes it on its own success/failure path; this covers the
+      // edge case where _messaging assignment threw before _captureColdStart
+      // even ran.
+      if (!_coldStartGate.isCompleted) _coldStartGate.complete();
     }
+  }
+
+  /// Reads the iOS cold-start initial message (a fast in-memory lookup) and
+  /// stashes any URL it carries into the one-shot push vault. Always
+  /// completes [_coldStartGate] before returning, so EntryGate can rely on
+  /// the gate even when the lookup itself fails or times out.
+  Future<void> _captureColdStart() async {
+    try {
+      debugPrint('[PULSE] capturing cold-start initial message…');
+      final cold = await _messaging!.getInitialMessage().timeout(
+        const Duration(seconds: 4),
+        onTimeout: () {
+          debugPrint(
+              '[PULSE] getInitialMessage timeout — assume no cold-start');
+          return null;
+        },
+      );
+      if (cold != null) {
+        debugPrint(
+          '[PULSE] cold-start RemoteMessage'
+          ' id=${cold.messageId}'
+          ' notif=${cold.notification?.title}/${cold.notification?.body}'
+          ' data=${cold.data}',
+        );
+        await _onColdStart(cold);
+      } else {
+        debugPrint('[PULSE] no cold-start initial message');
+      }
+    } catch (err, st) {
+      debugPrint('[PULSE] captureColdStart failed: $err\n$st');
+    } finally {
+      if (!_coldStartGate.isCompleted) _coldStartGate.complete();
+    }
+  }
+
+  /// Pulls a URL out of an FCM payload, tolerating the various keys that
+  /// different backends use for the destination link. Without this, a push
+  /// sent with `link` / `target` / `deeplink` / `deep_link` would be silently
+  /// dropped because the previous implementation only checked `data['url']`.
+  String? _extractUrl(RemoteMessage message) {
+    String? scan(Map<String, dynamic> map) {
+      for (final key in const [
+        'url',
+        'link',
+        'target',
+        'deeplink',
+        'deep_link',
+      ]) {
+        final raw = map[key];
+        if (raw is String && raw.trim().isNotEmpty) return raw.trim();
+      }
+      return null;
+    }
+
+    final direct = scan(message.data);
+    if (direct != null) return direct;
+    // Some backends nest the actual payload one level deeper.
+    final nested = message.data['payload'];
+    if (nested is Map) {
+      return scan(Map<String, dynamic>.from(nested));
+    }
+    return null;
   }
 
   Future<String?> refreshToken({bool notify = true}) async {
@@ -399,9 +488,9 @@ class PulseDispatch {
     );
     final notif = message.notification;
     if (notif == null) {
-      // Data-only push in foreground: still try to honor data.url (some FCM
-      // payloads omit notification when content-available is set).
-      final url = message.data['url'] as String?;
+      // Data-only push in foreground: still try to honor the destination URL
+      // (some FCM payloads omit `notification` when content-available is set).
+      final url = _extractUrl(message);
       if (url != null && url.isNotEmpty) {
         _dispatchUrl(url, source: 'fg-data-only');
       }
@@ -504,7 +593,7 @@ class PulseDispatch {
   }
 
   Future<void> _onColdStart(RemoteMessage message) async {
-    final url = message.data['url'] as String?;
+    final url = _extractUrl(message);
     debugPrint(
       '[PULSE] cold-start tap data=${message.data} url=${url ?? 'null'}',
     );
@@ -513,11 +602,12 @@ class PulseDispatch {
       // returns and EntryGate calls consumeOneShotPush(). Without await,
       // the async write could complete after the read, losing the URL.
       await _cache.stashOneShotPush(url);
+      debugPrint('[PULSE] cold-start url stashed for next entry');
     }
   }
 
   void _onTapInBackground(RemoteMessage message) {
-    final url = message.data['url'] as String?;
+    final url = _extractUrl(message);
     debugPrint(
       '[PULSE] background tap data=${message.data} url=${url ?? 'null'}',
     );

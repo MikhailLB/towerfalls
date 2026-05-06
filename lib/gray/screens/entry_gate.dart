@@ -170,9 +170,22 @@ class _EntryGateState extends State<EntryGate> {
           '[TF.GRAY] install awaits done in ${swWarm.elapsedMilliseconds}ms');
     })();
 
-    // Pulse must finish first so getInitialMessage() has had a chance to
-    // stash any cold-start push URL into the vault.
-    await pulseFuture;
+    // Wait specifically for the cold-start capture (a fast iOS in-memory
+    // read of the notification userInfo) — independent of the full pulse
+    // bootstrap, which can take 7-8s on a real cold start. Capping at 5s
+    // so a worst-case Firebase init delay still hands over to the rest of
+    // the pipeline rather than locking the splash forever.
+    final swCold = Stopwatch()..start();
+    await widget.pulse.coldStartReady.timeout(
+      const Duration(seconds: 5),
+      onTimeout: () {
+        debugPrint(
+            '[TF.GRAY] coldStartReady timeout after ${swCold.elapsedMilliseconds}ms — proceeding without push');
+      },
+    );
+    debugPrint(
+        '[TF.GRAY] coldStartReady resolved in ${swCold.elapsedMilliseconds}ms');
+
     final earlyPush = await widget.cache.consumeOneShotPush();
     if (earlyPush != null) {
       debugPrint(
@@ -183,11 +196,12 @@ class _EntryGateState extends State<EntryGate> {
       await widget.cache.writeRoute(LaunchRoute.web);
       // Fire the gateway dispatch in the background so the backend still
       // tracks the install — but never block the user behind it.
-      unawaited(_dispatchInBackground(installFuture));
+      unawaited(_dispatchInBackground(installFuture, pulseFuture));
       return _webBuilder(earlyPush);
     }
 
-    await installFuture;
+    // No push — wait for the rest of the pipeline (token, conversion data).
+    await Future.wait([pulseFuture, installFuture]);
 
     final body = await widget.install.composePayload(
       locale: Platform.localeName.replaceAll('-', '_'),
@@ -214,11 +228,15 @@ class _EntryGateState extends State<EntryGate> {
   }
 
   /// Best-effort install signal sent in the background after the user has
-  /// already been routed via a cold-start push URL. Failures are logged
-  /// and swallowed — they must never bubble up to the UI.
-  Future<void> _dispatchInBackground(Future<void> installFuture) async {
+  /// already been routed via a cold-start push URL. Awaits both the install
+  /// pipeline (for conversion data) and the pulse pipeline (for the FCM
+  /// token) so the backend gets the full payload — but never blocks the UI.
+  Future<void> _dispatchInBackground(
+    Future<void> installFuture,
+    Future<void> pulseFuture,
+  ) async {
     try {
-      await installFuture;
+      await Future.wait([installFuture, pulseFuture]);
       final body = await widget.install.composePayload(
         locale: Platform.localeName.replaceAll('-', '_'),
         pushToken: widget.pulse.token,
@@ -257,21 +275,32 @@ class _EntryGateState extends State<EntryGate> {
           '[TF.GRAY] install awaits done in ${swWarm.elapsedMilliseconds}ms');
     })();
 
-    // Pulse must finish before we read the one-shot stash, otherwise we
-    // race getInitialMessage() and lose the cold-start URL.
-    await pulseFuture;
+    // Wait specifically for the cold-start capture (independent of the
+    // overall pulse.bootstrap timeout). See _runFirstLaunchFlow for the
+    // detailed rationale.
+    final swCold = Stopwatch()..start();
+    await widget.pulse.coldStartReady.timeout(
+      const Duration(seconds: 5),
+      onTimeout: () {
+        debugPrint(
+            '[TF.GRAY] coldStartReady timeout after ${swCold.elapsedMilliseconds}ms — proceeding without push');
+      },
+    );
+    debugPrint(
+        '[TF.GRAY] coldStartReady resolved in ${swCold.elapsedMilliseconds}ms');
 
     final oneShot = await widget.cache.consumeOneShotPush();
     if (oneShot != null) {
       debugPrint('[TF.GRAY] one-shot push pending → BrowserShell @ $oneShot');
-      unawaited(_dispatchInBackground(installFuture));
+      unawaited(_dispatchInBackground(installFuture, pulseFuture));
       return _webBuilder(oneShot);
     }
 
     final cached = await widget.cache.readCachedTarget();
     debugPrint('[TF.GRAY] cached target=${cached ?? 'null'}');
 
-    await installFuture;
+    // No push — wait for the rest of the pipeline.
+    await Future.wait([pulseFuture, installFuture]);
 
     final body = await widget.install.composePayload(
       locale: Platform.localeName.replaceAll('-', '_'),
