@@ -24,7 +24,13 @@ import UserNotifications
 class SceneDelegate: FlutterSceneDelegate {
   /// UserDefaults key that mirrors the Dart-side one-shot push slot. Read by
   /// `lib/gray/services/native_push_bridge.dart#consumeColdStartUrl`.
-  static let coldStartUrlKey = "tf_gray_native_cold_start_url"
+  ///
+  /// The `flutter.` prefix is mandatory: the Flutter `shared_preferences`
+  /// plugin on iOS namespaces all keys with `flutter.` and would silently
+  /// ignore anything written without it. This way the Dart side reads the
+  /// value directly from UserDefaults via SharedPreferences without needing
+  /// any MethodChannel registration timing dance.
+  static let coldStartUrlKey = "flutter.tf_gray_native_cold_start_url"
 
   override func scene(
     _ scene: UIScene,
