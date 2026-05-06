@@ -320,6 +320,14 @@ class _LoadingScreenState extends State<LoadingScreen>
           duration: const Duration(milliseconds: 300),
           opacity: screenReady ? 1 : 0,
           child: Align(
+            alignment: Alignment(0, landscape ? 0.40 : 0.55),
+            child: _buildDropZoneBadge(landscape: landscape),
+          ),
+        ),
+        AnimatedOpacity(
+          duration: const Duration(milliseconds: 300),
+          opacity: screenReady ? 1 : 0,
+          child: Align(
             alignment: Alignment(0, landscape ? 0.62 : 0.75),
             child: FractionallySizedBox(
               widthFactor: landscape ? 0.30 : 0.72,
@@ -336,6 +344,32 @@ class _LoadingScreenState extends State<LoadingScreen>
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildDropZoneBadge({required bool landscape}) {
+    final fontSize = landscape ? 18.0 : 26.0;
+    return Text(
+      'DROP ZONE',
+      textAlign: TextAlign.center,
+      style: TextStyle(
+        fontSize: fontSize,
+        fontWeight: FontWeight.w900,
+        letterSpacing: 6,
+        color: const Color(0xFFFFC04A),
+        shadows: const [
+          Shadow(
+            color: Color(0xFFFF6A00),
+            blurRadius: 14,
+            offset: Offset(0, 1),
+          ),
+          Shadow(
+            color: Colors.black,
+            blurRadius: 6,
+            offset: Offset(0, 2),
+          ),
+        ],
+      ),
     );
   }
 
