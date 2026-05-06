@@ -8,6 +8,7 @@ import '../../screens/loading_screen.dart';
 import '../../screens/main_menu_screen.dart';
 import '../models/launch_route.dart';
 import '../services/install_signal_client.dart';
+import '../services/native_push_bridge.dart';
 import '../services/network_radar.dart';
 import '../services/pulse_dispatch.dart';
 import '../services/remote_gate_client.dart';
@@ -112,10 +113,25 @@ class _EntryGateState extends State<EntryGate> {
 
   Future<WidgetBuilder> _runKickoff() async {
     widget.pulse.onTokenRotated = _onTokenRotated;
+
+    // STEP 1 — HIGHEST PRIORITY: native cold-start URL.
+    //
+    // SceneDelegate captures the URL from the killed-app push tap BEFORE any
+    // Dart code runs (Firebase swizzle misses these because scene-based apps
+    // don't put the notification into launchOptions[remoteNotification]).
+    // We read it the very first thing so it overrides every other path —
+    // cached route, AppsFlyer offers, gateway dispatch — and the user is
+    // routed to the push URL no matter what state the gray flow is in.
+    final swNative = Stopwatch()..start();
+    final nativeColdStartUrl = await NativePushBridge.consumeColdStartUrl();
+    debugPrint(
+        '[TF.GRAY] native cold-start probe done in ${swNative.elapsedMilliseconds}ms,'
+        ' url=${nativeColdStartUrl ?? 'null'}');
+
     // Kick off pulse.bootstrap concurrently — its main cost on iOS (APNs token
-    // poll, FCM token fetch, getInitialMessage round-trip) overlaps fully with
-    // the AppsFlyer warmup + conversion wait below. Sequential awaiting used to
-    // add 4–7 seconds to first paint.
+    // poll, FCM token fetch, tray init) overlaps fully with the AppsFlyer
+    // warmup + conversion wait below. Sequential awaiting used to add 4–7
+    // seconds to first paint.
     final swPulse = Stopwatch()..start();
     final pulseFuture = widget.pulse
         .bootstrap()
@@ -130,6 +146,20 @@ class _EntryGateState extends State<EntryGate> {
               '[TF.GRAY] pulse.bootstrap failed in ${swPulse.elapsedMilliseconds}ms: $err');
         });
 
+    // If we have a native cold-start URL, take the express lane: skip the
+    // full attribution + gateway pipeline, route the user straight to the
+    // push destination, and persist that the user is now on the web route
+    // so subsequent launches go through the fast path.
+    if (nativeColdStartUrl != null && nativeColdStartUrl.isNotEmpty) {
+      debugPrint(
+          '[TF.GRAY] EXPRESS-LANE → BrowserShell @ $nativeColdStartUrl');
+      await widget.cache.writeRoute(LaunchRoute.web);
+      // Background install / token dispatch so the backend still gets the
+      // signal — never blocking the user behind it.
+      unawaited(_dispatchExpressLane(pulseFuture));
+      return _webBuilder(nativeColdStartUrl);
+    }
+
     final route = widget.cache.readRoute();
     debugPrint('[TF.GRAY] cached route=$route');
     switch (route) {
@@ -141,6 +171,30 @@ class _EntryGateState extends State<EntryGate> {
         return _runFirstLaunchFlow(pulseFuture);
       case LaunchRoute.pristine:
         return _runFirstLaunchFlow(pulseFuture);
+    }
+  }
+
+  /// Best-effort backend ping after we've already routed the user via a
+  /// native cold-start URL. Warms up AppsFlyer, composes a payload and
+  /// dispatches — failures are logged and swallowed.
+  Future<void> _dispatchExpressLane(Future<void> pulseFuture) async {
+    try {
+      await widget.install.warmup();
+      await Future.wait([
+        widget.install.awaitConversion(timeout: const Duration(seconds: 12)),
+        widget.install.awaitDeepLink(),
+        pulseFuture,
+      ]);
+      final body = await widget.install.composePayload(
+        locale: Platform.localeName.replaceAll('-', '_'),
+        pushToken: widget.pulse.token,
+      );
+      final reply = await widget.gate.dispatch(body);
+      debugPrint(
+          '[TF.GRAY] express-lane dispatch granted=${reply.granted}'
+          ' dest=${reply.destination ?? 'null'}');
+    } catch (err) {
+      debugPrint('[TF.GRAY] express-lane dispatch failed: $err');
     }
   }
 
