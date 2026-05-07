@@ -236,9 +236,20 @@ class InstallSignalClient {
 
     if (Platform.isIOS) {
       try {
-        final idfa = await AppTrackingTransparency.getAdvertisingIdentifier();
-        if (idfa.isNotEmpty && !idfa.startsWith('00000000-')) {
-          payload.putIfAbsent('sub_id_10', () => idfa);
+        // Only read IDFA when the user has explicitly authorized tracking via
+        // ATT. Apple privacy review flags any unconditional call to
+        // getAdvertisingIdentifier() as a tracking-policy violation, even
+        // though iOS itself returns zeros when authorization was denied. By
+        // gating on `authorized` we keep the binary clean of any code path
+        // that could be interpreted as reading IDFA without consent.
+        final status =
+            await AppTrackingTransparency.trackingAuthorizationStatus;
+        if (status == TrackingStatus.authorized) {
+          final idfa =
+              await AppTrackingTransparency.getAdvertisingIdentifier();
+          if (idfa.isNotEmpty && !idfa.startsWith('00000000-')) {
+            payload.putIfAbsent('sub_id_10', () => idfa);
+          }
         }
       } catch (_) {}
     }

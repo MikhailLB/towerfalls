@@ -11,7 +11,6 @@
 		<string>register.appsflyer.com</string>
 		<string>onelink.me</string>
 		<string>app-measurement.com</string>
-		<string>firebase-settings.crashlytics.com</string>
 	</array>
 	<key>NSPrivacyCollectedDataTypes</key>
 	<array>
@@ -26,6 +25,7 @@
 			<array>
 				<string>NSPrivacyCollectedDataTypePurposeAnalytics</string>
 				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+				<string>NSPrivacyCollectedDataTypePurposeThirdPartyAdvertising</string>
 			</array>
 		</dict>
 		<dict>
@@ -40,18 +40,6 @@
 				<string>NSPrivacyCollectedDataTypePurposeAnalytics</string>
 			</array>
 		</dict>
-		<dict>
-			<key>NSPrivacyCollectedDataType</key>
-			<string>NSPrivacyCollectedDataTypeCrashData</string>
-			<key>NSPrivacyCollectedDataTypeLinked</key>
-			<false/>
-			<key>NSPrivacyCollectedDataTypeTracking</key>
-			<false/>
-			<key>NSPrivacyCollectedDataTypePurposes</key>
-			<array>
-				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
-			</array>
-		</dict>
 	</array>
 	<key>NSPrivacyAccessedAPITypes</key>
 	<array>
@@ -60,7 +48,7 @@
 			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
 			<key>NSPrivacyAccessedAPITypeReasons</key>
 			<array>
-				<string>1C8F.1</string>
+				<string>CA92.1</string>
 			</array>
 		</dict>
 		<dict>
@@ -77,14 +65,6 @@
 			<key>NSPrivacyAccessedAPITypeReasons</key>
 			<array>
 				<string>85F4.1</string>
-			</array>
-		</dict>
-		<dict>
-			<key>NSPrivacyAccessedAPIType</key>
-			<string>NSPrivacyAccessedAPICategoryActiveKeyboards</string>
-			<key>NSPrivacyAccessedAPITypeReasons</key>
-			<array>
-				<string>54BD.1</string>
 			</array>
 		</dict>
 	</array>

@@ -77,10 +77,6 @@
 	<false/>
 	<key>NSUserTrackingUsageDescription</key>
 	<string>We use this identifier to personalise tournaments, in-game offers and reward animations across your sessions.</string>
-	<key>UIBackgroundModes</key>
-	<array>
-		<string>remote-notification</string>
-	</array>
 	<key>FirebaseAppDelegateProxyEnabled</key>
 	<true/>
 	<key>NSAppTransportSecurity</key>
@@ -96,9 +92,9 @@
 		<string>mailto</string>
 	</array>
 	<key>NSCameraUsageDescription</key>
-	<string>Camera access is used only when a web page asks you to attach a photo.</string>
+	<string>Access is requested by the embedded web view if a page asks you to attach a photo. You will be prompted before the camera is used.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Microphone access is used only when a web page asks you to attach media with sound.</string>
+	<string>Access is requested by the embedded web view if a page asks you to attach audio media. You will be prompted before the microphone is used.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Photo library access is used to attach images requested by the web page.</string>
 </dict>
