@@ -330,7 +330,7 @@ class _LoadingScreenState extends State<LoadingScreen>
           duration: const Duration(milliseconds: 300),
           opacity: screenReady ? 1 : 0,
           child: Align(
-            alignment: Alignment(0, landscape ? 0.82 : 0.75),
+            alignment: Alignment(0, landscape ? 0.94 : 0.75),
             child: FractionallySizedBox(
               widthFactor: landscape ? 0.30 : 0.72,
               child: ConstrainedBox(
