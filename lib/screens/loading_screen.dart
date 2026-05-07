@@ -322,7 +322,7 @@ class _LoadingScreenState extends State<LoadingScreen>
           duration: const Duration(milliseconds: 300),
           opacity: screenReady ? 1 : 0,
           child: Align(
-            alignment: Alignment(0, landscape ? 0.40 : 0.55),
+            alignment: Alignment(0, landscape ? 0.50 : 0.55),
             child: _buildDropZoneBadge(landscape: landscape),
           ),
         ),
@@ -330,7 +330,7 @@ class _LoadingScreenState extends State<LoadingScreen>
           duration: const Duration(milliseconds: 300),
           opacity: screenReady ? 1 : 0,
           child: Align(
-            alignment: Alignment(0, landscape ? 0.62 : 0.75),
+            alignment: Alignment(0, landscape ? 0.82 : 0.75),
             child: FractionallySizedBox(
               widthFactor: landscape ? 0.30 : 0.72,
               child: ConstrainedBox(
@@ -350,7 +350,7 @@ class _LoadingScreenState extends State<LoadingScreen>
   }
 
   Widget _buildDropZoneBadge({required bool landscape}) {
-    final fontSize = landscape ? 18.0 : 26.0;
+    final fontSize = landscape ? 22.0 : 26.0;
     return Text(
       'DROP ZONE',
       textAlign: TextAlign.center,
