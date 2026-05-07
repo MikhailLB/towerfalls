@@ -171,9 +171,16 @@ class _BrowserShellState extends State<BrowserShell>
         _injectInputFontSize();
         if (!_firstPaintFired) {
           _firstPaintFired = true;
-          try {
-            widget.onFirstPaint?.call();
-          } catch (_) {}
+          // Delay the "content ready" signal by one short frame so the SPA
+          // has time to mount its first component tree after the HTML document
+          // has loaded. Without this the loading splash fades too early and
+          // the user sees the website's blue CSS background while JavaScript
+          // is still rendering the app shell.
+          Future.delayed(const Duration(milliseconds: 700), () {
+            try {
+              widget.onFirstPaint?.call();
+            } catch (_) {}
+          });
         }
       },
       onWebResourceError: (err) {

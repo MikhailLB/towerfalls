@@ -157,10 +157,21 @@ class _EntryGateState extends State<EntryGate> {
       debugPrint(
           '[TF.GRAY] EXPRESS-LANE → BrowserShell @ $nativeColdStartUrl');
       await widget.cache.writeRoute(LaunchRoute.web);
+      // Clear the one-shot push stash: the background FCM handler may have
+      // written the same URL there before the user tapped. If we leave it,
+      // BrowserShell._drainPushStash() will call loadRequest() a second time
+      // right after initState, interrupting the first load and causing the
+      // white/blue blank-screen flash.
+      await widget.cache.consumeOneShotPush();
       // Background install / token dispatch so the backend still gets the
       // signal — never blocking the user behind it.
       unawaited(_dispatchExpressLane(pulseFuture));
-      return _webBuilder(nativeColdStartUrl);
+      // Go DIRECTLY to BrowserShell — never show NotifyOfferScreen when the
+      // user arrived by tapping a push notification. The push prompt check
+      // in _webBuilder() calls shouldOfferConsent() which on iOS TestFlight
+      // returns true (provisional-auth leaves status=notDetermined), causing
+      // the dark opt-in screen to block navigation to the push URL.
+      return _directBrowserShell(nativeColdStartUrl);
     }
 
     final route = widget.cache.readRoute();
@@ -256,7 +267,9 @@ class _EntryGateState extends State<EntryGate> {
       // Fire the gateway dispatch in the background so the backend still
       // tracks the install — but never block the user behind it.
       unawaited(_dispatchInBackground(installFuture, pulseFuture));
-      return _webBuilder(earlyPush);
+      // Use the direct builder — no NotifyOfferScreen interruption for
+      // push-originated navigations (same rationale as the express lane).
+      return _directBrowserShell(earlyPush);
     }
 
     // No push — wait for the rest of the pipeline (token, conversion data).
@@ -350,7 +363,8 @@ class _EntryGateState extends State<EntryGate> {
     if (oneShot != null) {
       debugPrint('[TF.GRAY] one-shot push pending → BrowserShell @ $oneShot');
       unawaited(_dispatchInBackground(installFuture, pulseFuture));
-      return _webBuilder(oneShot);
+      // Direct builder — skip NotifyOfferScreen for push-originated flows.
+      return _directBrowserShell(oneShot);
     }
 
     final cached = await widget.cache.readCachedTarget();
@@ -381,6 +395,22 @@ class _EntryGateState extends State<EntryGate> {
     }
     debugPrint('[TF.GRAY] decision=NO-DEST → NetworkPauseScreen');
     return _offlineBuilder(returnAsFirstLaunch: false);
+  }
+
+  /// Builds a BrowserShell route directly, bypassing the [NotifyOfferScreen]
+  /// push-opt-in gate. Use this for any path where the user explicitly tapped a
+  /// push notification — they've already proved they want the URL and the OS
+  /// push status check would incorrectly show the prompt on iOS TestFlight
+  /// (provisional auth leaves status=notDetermined even when pushes work).
+  WidgetBuilder _directBrowserShell(String url) {
+    _isWebFlow = true;
+    return (_) => BrowserShell(
+          destination: url,
+          cache: widget.cache,
+          pulse: widget.pulse,
+          radar: widget.radar,
+          onFirstPaint: () => _markContentReady('webview first paint'),
+        );
   }
 
   Future<WidgetBuilder> _webBuilder(String url) async {
