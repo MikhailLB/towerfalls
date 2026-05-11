@@ -1,7 +1,7 @@
-name: tower_falls
-description: "Tower Falls — tetris-like tower building game."
+name: gray_android_template
+description: "Drop-in Android gray-flow module — AppsFlyer attribution + remote gateway + FCM + WebView. Plug into any Flutter Android app."
 publish_to: 'none'
-version: 1.0.2+6
+version: 1.0.0+1
 
 environment:
   sdk: ^3.11.4
@@ -10,14 +10,7 @@ dependencies:
   flutter:
     sdk: flutter
 
-  cupertino_icons: ^1.0.8
-
-  # White (game) layer
-  video_player: ^2.10.0
-  shared_preferences: ^2.5.0
-  url_launcher: ^6.3.2
-
-  # Gray layer: attribution + remote gate + push + browser
+  # Core gray-flow stack.
   appsflyer_sdk: ^6.16.2
   firebase_core: ^3.13.1
   firebase_messaging: ^15.2.6
@@ -27,31 +20,38 @@ dependencies:
   package_info_plus: ^8.3.0
   device_info_plus: ^11.5.0
   flutter_secure_storage: ^9.2.4
+  shared_preferences: ^2.5.0
   flutter_local_notifications: ^17.2.4
+  url_launcher: ^6.3.2
+
+  # WebView (Android-only; the iOS plugin would have to be added separately
+  # if/when this branch is merged into a cross-platform project).
   webview_flutter: ^4.10.0
   webview_flutter_android: ^4.3.4
+
+  # Used by BrowserShell when a web page asks for a file/photo via
+  # <input type="file"> or getUserMedia-like flows.
   file_picker: ^10.3.4
   image_picker: ^1.2.1
+
+  # Used by the branded NotifyOfferScreen for the loop video background. The
+  # screen falls back to a flat gradient when GrayAssets.notifyOfferVideo*
+  # are not set, so removing this dependency is safe as long as the host
+  # never plans to ship a notify-offer video.
+  video_player: ^2.10.0
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
-  flutter_launcher_icons: ^0.14.4
-
-flutter_launcher_icons:
-  android: true
-  ios: true
-  image_path: "assets/logo/logo.png"
-  remove_alpha_ios: true
-  adaptive_icon_background: "#1a1a1a"
-  adaptive_icon_foreground: "assets/logo/logo.png"
 
 flutter:
   uses-material-design: true
-  assets:
-    - assets/gameplay/
-    - assets/loading/
-    - assets/logo/
-    - assets/notify/
-    - "assets/aditional assets/nowifi_screen/"
+  # No bundled assets in the template — the gray module renders everything
+  # via Material widgets / gradients out of the box. To brand it, declare
+  # your assets here AND configure their paths via GrayAssets.configure(...).
+  # Example:
+  #   assets:
+  #     - assets/gray/splash/
+  #     - assets/gray/notify/
+  #     - assets/gray/network_pause/

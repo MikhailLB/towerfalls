@@ -5,14 +5,14 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
 
     <application
-        android:label="Tower Falls"
+        android:label="Gray Template"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
-        android:networkSecurityConfig="@xml/tf_network_policy"
+        android:networkSecurityConfig="@xml/gray_network_policy"
         android:enableOnBackInvokedCallback="true"
         android:allowBackup="false"
         android:fullBackupContent="false"
-        android:dataExtractionRules="@xml/tf_data_extraction"
+        android:dataExtractionRules="@xml/gray_data_extraction"
         android:extractNativeLibs="false"
         tools:replace="android:allowBackup,android:fullBackupContent,android:dataExtractionRules">
         <activity
@@ -41,7 +41,7 @@
             android:resource="@drawable/ic_pulse_notification" />
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_channel_id"
-            android:value="tf_pulse_channel" />
+            android:value="gray_pulse_channel" />
 
         <meta-data
             android:name="flutterEmbedding"

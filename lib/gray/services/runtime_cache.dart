@@ -7,12 +7,14 @@ import '../models/launch_route.dart';
 /// non-sensitive flags and FlutterSecureStorage for the cached destination
 /// URL and the one-shot push target.
 class RuntimeCache {
-  static const String _kRoute = 'tf.gray.route';
-  static const String _kCachedTarget = 'tf.gray.target.value';
-  static const String _kCachedTargetTtl = 'tf.gray.target.ttl';
-  static const String _kPushCooldown = 'tf.gray.push.cooldown';
-  static const String _kPushConsent = 'tf.gray.push.consent';
-  static const String _kPushOneShot = 'tf.gray.push.oneshot';
+  // Storage keys are namespaced under `gray.` to avoid collisions with the
+  // host app's own SharedPreferences / FlutterSecureStorage entries.
+  static const String _kRoute = 'gray.route';
+  static const String _kCachedTarget = 'gray.target.value';
+  static const String _kCachedTargetTtl = 'gray.target.ttl';
+  static const String _kPushCooldown = 'gray.push.cooldown';
+  static const String _kPushConsent = 'gray.push.consent';
+  static const String _kPushOneShot = 'gray.push.oneshot';
 
   late SharedPreferences _prefs;
   final FlutterSecureStorage _vault = const FlutterSecureStorage();

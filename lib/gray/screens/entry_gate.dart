@@ -4,8 +4,6 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
-import '../../screens/loading_screen.dart';
-import '../../screens/main_menu_screen.dart';
 import '../models/launch_route.dart';
 import '../services/install_signal_client.dart';
 import '../services/network_radar.dart';
@@ -13,18 +11,54 @@ import '../services/pulse_dispatch.dart';
 import '../services/remote_gate_client.dart';
 import '../services/runtime_cache.dart';
 import 'browser_shell.dart';
+import 'default_splash.dart';
 import 'network_pause_screen.dart';
 import 'notify_offer_screen.dart';
 
-/// Entry point for the gray flow. Runs the boot pipeline (push bootstrap,
-/// AppsFlyer warmup, gate dispatch, …) under the same loading splash that
-/// the white-only path uses, so the user sees a single unified screen.
+/// Builder signature for the loading splash shown while the gray pipeline
+/// (push bootstrap, AppsFlyer warmup, gate dispatch) is in flight.
+///
+/// The host's splash widget MUST honour all four arguments:
+///
+///   • [routeFuture] — completes with the resolved page builder; the splash
+///     should not navigate until this resolves.
+///   • [contentReady] — completes when the resolved widget (e.g. BrowserShell)
+///     has rendered its first paint. The splash should keep itself visible
+///     until both [routeFuture] and [contentReady] are settled.
+///   • [keepAsUnderlay] — if `true`, the splash must mount the resolved
+///     widget underneath itself before fading out (so a WebView keeps its
+///     state across the handover). If `false`, use `Navigator.pushReplacement`.
+///
+/// See [DefaultGraySplash] for a reference implementation. When this builder
+/// is null, the default is used.
+typedef GraySplashBuilder = Widget Function(
+  Future<WidgetBuilder> routeFuture,
+  Future<void> contentReady,
+  Future<bool> keepAsUnderlay,
+);
+
+/// Entry point for the gray boot flow.
+///
+/// The flow decides on every launch whether to:
+///   • show the host app's `fallbackHomeBuilder` (organic / no destination), or
+///   • open the [BrowserShell] with a destination URL returned by the gateway.
+///
+/// While the decision is being made, [splashBuilder] (or [DefaultGraySplash]
+/// if null) is shown so the user sees a single uninterrupted loading screen.
 class EntryGate extends StatefulWidget {
   final RuntimeCache cache;
   final NetworkRadar radar;
   final InstallSignalClient install;
   final RemoteGateClient gate;
   final PulseDispatch pulse;
+
+  /// Required: the host app's "regular" home screen, opened when the gray
+  /// flow concludes the user is organic / there is no destination URL.
+  final WidgetBuilder fallbackHomeBuilder;
+
+  /// Optional: replace the splash widget. If null, [DefaultGraySplash] is
+  /// used. See [GraySplashBuilder] for the contract it must honour.
+  final GraySplashBuilder? splashBuilder;
 
   const EntryGate({
     super.key,
@@ -33,6 +67,8 @@ class EntryGate extends StatefulWidget {
     required this.install,
     required this.gate,
     required this.pulse,
+    required this.fallbackHomeBuilder,
+    this.splashBuilder,
   });
 
   @override
@@ -46,9 +82,9 @@ class _EntryGateState extends State<EntryGate> {
   // any other route it is completed eagerly in [_kickoff] so the loading
   // splash hands over without an extra wait.
   final Completer<void> _contentReady = Completer<void>();
-  // Tells LoadingScreen whether the resolved widget must stay mounted
-  // beneath the splash (web flow → preserve WebView state) or whether it
-  // should be promoted to a top-level route via Navigator.pushReplacement.
+  // Tells the splash whether the resolved widget must stay mounted beneath
+  // it (web flow → preserve WebView state) or whether the splash should hand
+  // over via Navigator.pushReplacement (every other route).
   final Completer<bool> _keepUnderlay = Completer<bool>();
   bool _isWebFlow = false;
 
@@ -86,7 +122,7 @@ class _EntryGateState extends State<EntryGate> {
           builder = await _runReturningWebFlow();
           break;
         case LaunchRoute.arcade:
-          builder = (_) => const MainMenuScreen();
+          builder = widget.fallbackHomeBuilder;
           break;
         case LaunchRoute.pristine:
           builder = await _runFirstLaunchFlow();
@@ -96,7 +132,7 @@ class _EntryGateState extends State<EntryGate> {
       if (kDebugMode) {
         debugPrint('[EntryGate] kickoff failed: $err\n$st');
       }
-      builder = (_) => const MainMenuScreen();
+      builder = widget.fallbackHomeBuilder;
     }
 
     // Non-web routes don't have their own readiness signal — fire the
@@ -135,7 +171,7 @@ class _EntryGateState extends State<EntryGate> {
       return await _webBuilder(reply.destination!);
     }
     await widget.cache.writeRoute(LaunchRoute.arcade);
-    return (_) => const MainMenuScreen();
+    return widget.fallbackHomeBuilder;
   }
 
   Future<WidgetBuilder> _runReturningWebFlow() async {
@@ -181,7 +217,9 @@ class _EntryGateState extends State<EntryGate> {
     //      noise — and tapping "Accept" on it would silently no-op.
     if (widget.cache.needsPushPrompt()) {
       final canAsk = await widget.pulse.shouldOfferConsent();
-      if (kDebugMode) debugPrint('[EntryGate] push offer gate: canAsk=$canAsk');
+      if (kDebugMode) {
+        debugPrint('[EntryGate] push offer gate: canAsk=$canAsk');
+      }
       if (canAsk) {
         return (_) => NotifyOfferScreen(
               cache: widget.cache,
@@ -213,6 +251,8 @@ class _EntryGateState extends State<EntryGate> {
             install: widget.install,
             gate: widget.gate,
             pulse: widget.pulse,
+            fallbackHomeBuilder: widget.fallbackHomeBuilder,
+            splashBuilder: widget.splashBuilder,
           ),
         );
   }
@@ -227,7 +267,15 @@ class _EntryGateState extends State<EntryGate> {
 
   @override
   Widget build(BuildContext context) {
-    return LoadingScreen(
+    final builder = widget.splashBuilder;
+    if (builder != null) {
+      return builder(
+        _routeFuture,
+        _contentReady.future,
+        _keepUnderlay.future,
+      );
+    }
+    return DefaultGraySplash(
       routeFuture: _routeFuture,
       contentReady: _contentReady.future,
       keepAsUnderlay: _keepUnderlay.future,

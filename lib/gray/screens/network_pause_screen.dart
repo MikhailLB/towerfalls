@@ -2,7 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
-import '../../game/constants.dart';
+import '../config/gray_assets.dart';
 import '../services/network_radar.dart';
 
 /// Shown whenever the gray flow detects the device went offline. The artwork
@@ -79,20 +79,22 @@ class _NetworkPauseScreenState extends State<NetworkPauseScreen>
       body: LayoutBuilder(
         builder: (context, c) {
           final landscape = c.maxWidth > c.maxHeight;
-          final bgAsset =
-              landscape ? kNoWifiBgLandscape : kNoWifiBgPortrait;
+          final bgAsset = landscape
+              ? GrayAssets.networkPauseBackgroundLandscape
+              : GrayAssets.networkPauseBackgroundPortrait;
           final buttonWidth = landscape
               ? (c.maxWidth * 0.28).clamp(220.0, 420.0)
               : (c.maxWidth * 0.55).clamp(200.0, 360.0);
-          // The artwork's central panel ends roughly at ~60% height in
-          // portrait and ~80% in landscape — sit the button just below it.
           final buttonBottom = landscape
               ? c.maxHeight * 0.04
               : c.maxHeight * 0.20;
           return Stack(
             fit: StackFit.expand,
             children: [
-              Image.asset(bgAsset, fit: BoxFit.cover),
+              if (bgAsset != null && bgAsset.isNotEmpty)
+                Image.asset(bgAsset, fit: BoxFit.cover)
+              else
+                _DefaultPauseBackground(landscape: landscape),
               Positioned(
                 left: 0,
                 right: 0,
@@ -182,7 +184,14 @@ class _RetryPlate extends StatelessWidget {
               alignment: Alignment.center,
               fit: StackFit.expand,
               children: [
-                Image.asset(kNoWifiButton, fit: BoxFit.contain),
+                if (GrayAssets.networkPauseRetryButton != null &&
+                    GrayAssets.networkPauseRetryButton!.isNotEmpty)
+                  Image.asset(
+                    GrayAssets.networkPauseRetryButton!,
+                    fit: BoxFit.contain,
+                  )
+                else
+                  _DefaultRetryPlate(busy: busy),
                 if (busy)
                   const Center(
                     child: SizedBox(
@@ -197,6 +206,102 @@ class _RetryPlate extends StatelessWidget {
                   ),
               ],
             ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Default background used when [GrayAssets.networkPauseBackgroundPortrait]
+/// / `…Landscape` were not configured. Dark gradient + offline glyph + a
+/// hint line so the screen is still informative without bundled artwork.
+class _DefaultPauseBackground extends StatelessWidget {
+  final bool landscape;
+  const _DefaultPauseBackground({required this.landscape});
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        const DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [Color(0xFF111929), Color(0xFF050912)],
+            ),
+          ),
+        ),
+        Align(
+          alignment: Alignment(0, landscape ? -0.40 : -0.30),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons.wifi_off,
+                size: 64,
+                color: Color(0xFFE0E5EE),
+              ),
+              const SizedBox(height: 14),
+              const Text(
+                'No internet connection',
+                style: TextStyle(
+                  color: Color(0xFFE0E5EE),
+                  fontSize: 20,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.4,
+                ),
+              ),
+              const SizedBox(height: 6),
+              const Text(
+                'Reconnect and tap Retry.',
+                style: TextStyle(
+                  color: Color(0x99E0E5EE),
+                  fontSize: 14,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Default Material retry button used when
+/// [GrayAssets.networkPauseRetryButton] was not configured.
+class _DefaultRetryPlate extends StatelessWidget {
+  final bool busy;
+  const _DefaultRetryPlate({required this.busy});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Container(
+        height: 56,
+        constraints: const BoxConstraints(minWidth: 180),
+        padding: const EdgeInsets.symmetric(horizontal: 28),
+        decoration: BoxDecoration(
+          color: busy ? const Color(0xFFE6B86A) : const Color(0xFFFFC44E),
+          borderRadius: BorderRadius.circular(28),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x66000000),
+              blurRadius: 12,
+              offset: Offset(0, 4),
+            ),
+          ],
+        ),
+        alignment: Alignment.center,
+        child: const Text(
+          'RETRY',
+          style: TextStyle(
+            color: Color(0xFF2A150A),
+            fontSize: 18,
+            fontWeight: FontWeight.w800,
+            letterSpacing: 2,
           ),
         ),
       ),

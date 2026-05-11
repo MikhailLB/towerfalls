@@ -9,8 +9,13 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'runtime_cache.dart';
 import 'secure_http.dart';
 
-const String pulseChannelId = 'tf_pulse_channel';
-const String pulseChannelLabel = 'Tower Falls Updates';
+/// Notification channel ID used for ALL pushes the gray flow surfaces.
+/// MUST match `com.google.firebase.messaging.default_notification_channel_id`
+/// in `AndroidManifest.xml` — otherwise data-only background pushes silently
+/// fail to display on Android 13+ (the OS drops them with a "no channel"
+/// error and the user never sees the notification).
+const String pulseChannelId = 'gray_pulse_channel';
+const String pulseChannelLabel = 'App Updates';
 const String pulseIconRes = '@drawable/ic_pulse_notification';
 
 @pragma('vm:entry-point')
@@ -117,7 +122,7 @@ class PulseDispatch {
         const AndroidNotificationChannel(
           pulseChannelId,
           pulseChannelLabel,
-          description: 'Tower Falls real-time updates',
+          description: 'Real-time updates and offers.',
           importance: Importance.high,
         ),
       );

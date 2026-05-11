@@ -3,7 +3,12 @@ import 'dart:typed_data';
 /// XOR-based unmasking utility for storing AppsFlyer / Firebase / endpoint
 /// strings as obfuscated byte arrays in source. Until real keys arrive the
 /// arrays are empty, so [unmask] returns an empty string and gray services
-/// gracefully fall back to the offline arcade flow.
+/// short-circuit to the host's fallback home.
+///
+/// The salt is hardcoded — both `tool/encode_keys.dart` and this file MUST
+/// use the same byte sequence, otherwise the round-trip fails. Treat the
+/// value below as opaque; do not change it unless you also re-mask all
+/// existing constants in `runtime_brand.dart` / `gateway_endpoints.dart`.
 const _saltBytes = <int>[
   0x74, 0x66, 0x2E, 0x67, 0x61, 0x74, 0x65, 0x2E, 0x73, 0x61, 0x6C, 0x74,
   0x2E, 0x76, 0x31, 0x2E, 0x74, 0x6F, 0x77, 0x65, 0x72, 0x66, 0x61, 0x6C,

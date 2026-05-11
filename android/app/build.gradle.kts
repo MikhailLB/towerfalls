@@ -21,7 +21,7 @@ if (file("google-services.json").exists()) {
 }
 
 android {
-    namespace = "com.tstudiomgames.towerfalls"
+    namespace = "com.example.gray_template"
     compileSdk = 36
     ndkVersion = flutter.ndkVersion
 
@@ -36,8 +36,11 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.tstudiomgames.towerfalls"
-        minSdk = 30
+        // Replace with the host app's real applicationId before shipping.
+        applicationId = "com.example.gray_template"
+        // minSdk 26 covers FCM + WebView + ic_pulse_notification.xml (uses
+        // adaptive notification icons). Drop to 21 if you don't need them.
+        minSdk = 26
         targetSdk = 35
         versionCode = flutter.versionCode
         versionName = flutter.versionName

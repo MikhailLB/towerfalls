@@ -1,17 +1,27 @@
-# tower_falls
+# gray_android_template
 
-A new Flutter project.
+Drop-in **gray-flow** Flutter module for Android.
 
-## Getting Started
+Provides the full attribution / remote gateway / FCM / WebView boot pipeline
+in a single `lib/gray/` folder plus a tiny `GrayBoot` facade. Merge into any
+host Flutter project and call `GrayBoot.prepare()` + `gray.buildHome(...)`
+from `main()`.
 
-This project is a starting point for a Flutter application.
+**Read [`GRAY_PART.md`](GRAY_PART.md) for the full integration guide,
+architecture, and configuration reference.**
 
-A few resources to get you started if this is your first Flutter project:
+```dart
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  final gray = await GrayBoot.prepare();
+  runApp(MaterialApp(
+    home: gray.buildHome(
+      fallbackHomeBuilder: (_) => const MyExistingHomeScreen(),
+    ),
+  ));
+}
+```
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
-
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+When no AppsFlyer/Firebase/gateway keys have been provisioned, `GrayBoot`
+short-circuits straight to `fallbackHomeBuilder` — so dropping this module
+into a project is a safe no-op until you fill the keys.

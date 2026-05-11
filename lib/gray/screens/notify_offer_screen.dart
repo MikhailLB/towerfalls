@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:video_player/video_player.dart';
 
-import '../../game/constants.dart';
+import '../config/gray_assets.dart';
 import '../config/runtime_brand.dart';
 import '../services/network_radar.dart';
 import '../services/pulse_dispatch.dart';
@@ -75,8 +75,19 @@ class _NotifyOfferScreenState extends State<NotifyOfferScreen>
   Future<void> _loadVideo(Orientation orientation) async {
     _videoLoading = true;
     final asset = orientation == Orientation.landscape
-        ? kNotifyVideoLandscape
-        : kNotifyVideoPortrait;
+        ? GrayAssets.notifyOfferVideoLandscape
+        : GrayAssets.notifyOfferVideoPortrait;
+
+    if (asset == null || asset.isEmpty) {
+      if (mounted) {
+        setState(() {
+          _videoOrientation = orientation;
+          _videoFailed = true;
+        });
+      }
+      _videoLoading = false;
+      return;
+    }
 
     final previous = _video;
     final controller = VideoPlayerController.asset(asset);
@@ -169,6 +180,7 @@ class _NotifyOfferScreenState extends State<NotifyOfferScreen>
       body: LayoutBuilder(
         builder: (context, c) {
           final landscape = c.maxWidth > c.maxHeight;
+          final bg = GrayAssets.notifyOfferBackground;
           return Stack(
             fit: StackFit.expand,
             children: [
@@ -181,10 +193,18 @@ class _NotifyOfferScreenState extends State<NotifyOfferScreen>
                     child: VideoPlayer(video),
                   ),
                 )
-              else if (_videoFailed)
-                Image.asset(kBgAsset, fit: BoxFit.cover)
+              else if (_videoFailed && bg != null && bg.isNotEmpty)
+                Image.asset(bg, fit: BoxFit.cover)
               else
-                const ColoredBox(color: Color(0xFF050912)),
+                const DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [Color(0xFF132036), Color(0xFF050912)],
+                    ),
+                  ),
+                ),
               if (landscape)
                 _landscapeLayout(c)
               else
