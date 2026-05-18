@@ -1,7 +1,7 @@
 name: tower_falls
 description: "Tower Falls — tetris-like tower building game."
 publish_to: 'none'
-version: 1.0.2+7
+version: 1.0.2+8
 
 environment:
   sdk: ^3.11.4
