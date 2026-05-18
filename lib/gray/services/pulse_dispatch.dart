@@ -125,9 +125,11 @@ class PulseDispatch {
   }
 
   Future<bool> askConsent() async {
-    if (_messaging == null) {
+    // On Android, notification permission can be requested without Firebase.
+    // On iOS, _messaging must be present to call requestPermission().
+    if (_messaging == null && !Platform.isAndroid) {
       if (kDebugMode) {
-        debugPrint('[PULSE] askConsent skipped — Firebase missing');
+        debugPrint('[PULSE] askConsent skipped — Firebase missing (iOS)');
       }
       return false;
     }
@@ -233,16 +235,19 @@ class PulseDispatch {
   /// the offer screen would either be redundant (already authorised) or
   /// pointless (system prompt unreachable).
   Future<bool> shouldOfferConsent() async {
-    final m = _messaging;
-    if (m == null) return false;
     try {
       if (Platform.isAndroid) {
+        // On Android, notification permission check works independently of
+        // Firebase — we only need flutter_local_notifications impl.
         final impl = _tray.resolvePlatformSpecificImplementation<
             AndroidFlutterLocalNotificationsPlugin>();
         if (impl == null) return true;
         final enabled = await impl.areNotificationsEnabled();
         return enabled != true;
       }
+      // iOS: requires Firebase Messaging to read authorization status.
+      final m = _messaging;
+      if (m == null) return false;
       final settings = await m.getNotificationSettings();
       final status = settings.authorizationStatus;
       if (status == AuthorizationStatus.notDetermined) return true;
