@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "682456523206",
+    "project_id": "towerfalls-1c44c",
+    "storage_bucket": "towerfalls-1c44c.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:682456523206:android:5b3aeb1fe1dc71b1f312c7",
+        "android_client_info": {
+          "package_name": "com.tstudiomgames.towerfalls"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDq9q4O4vcak7dRmWHVcwdoXFeW9uRgNJU"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
